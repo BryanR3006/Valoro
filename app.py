@@ -1055,7 +1055,18 @@ def _faltantes_email(data, *, con_nombre=True, con_asunto=True, con_fecha=False)
         faltan.append("mensaje (contenido HTML)")
     if con_fecha and not (data.get("fecha_programada") or "").strip():
         faltan.append("fecha y hora de envío")
+    if con_fecha and (data.get("tipo") or "simple") not in ("simple", "recurrente"):
+        faltan.append("tipo (simple o recurrente)")
     return faltan
+
+
+def _error_columnas_email(exc):
+    """Mensaje claro si a ProgramacionEmail le faltan las columnas tipo o ultimo_error (ver README)."""
+    if "Unrecognized name" in str(exc) or "no such field" in str(exc).lower():
+        return ("A la tabla ProgramacionEmail le faltan columnas. Corre en BigQuery: "
+                f"ALTER TABLE `{PROGRAMACION_EMAIL_TABLE}` ADD COLUMN IF NOT EXISTS tipo STRING, "
+                "ADD COLUMN IF NOT EXISTS ultimo_error STRING;")
+    return str(exc)
 
 
 # ==================== EMAIL - PREVIEW ====================
@@ -1248,6 +1259,7 @@ def email_schedule():
     usuario = (data.get("usuario") or "").strip()
     reply_email = (data.get("reply_email") or "").strip()
     fecha_programada = (data.get("fecha_programada") or "").strip()
+    tipo = (data.get("tipo") or "simple").strip()
 
     faltan = _faltantes_email(data, con_fecha=True)
     if faltan:
@@ -1290,14 +1302,18 @@ def email_schedule():
             bigquery.ScalarQueryParameter("usuario", "STRING", usuario or ""),
             bigquery.ScalarQueryParameter("reply", "STRING", reply_email or ""),
             bigquery.ScalarQueryParameter("now", "TIMESTAMP", now),
+            bigquery.ScalarQueryParameter("tipo", "STRING", tipo),
         ])
 
         insert_sql = f"""
             INSERT INTO `{PROGRAMACION_EMAIL_TABLE}`
-            (id, fecha_programada, consulta_sql, plantilla, asunto, campana, estado, usuario, reply_email, fecha_creacion, fecha_actualizacion)
-            VALUES (@id, @fecha_prog, @consulta, @plantilla_param, @asunto_param, @campana, 'pendiente', @usuario, @reply, @now, @now)
+            (id, fecha_programada, consulta_sql, plantilla, asunto, campana, estado, usuario, reply_email, fecha_creacion, fecha_actualizacion, tipo)
+            VALUES (@id, @fecha_prog, @consulta, @plantilla_param, @asunto_param, @campana, 'pendiente', @usuario, @reply, @now, @now, @tipo)
         """
-        bq_client.query(insert_sql, job_config=job_config).result()
+        try:
+            bq_client.query(insert_sql, job_config=job_config).result()
+        except Exception as exc:
+            raise EmailServiceError(_error_columnas_email(exc))
 
         scheduler.add_job(
             execute_email_schedule, trigger="date", run_date=run_date,
@@ -1306,7 +1322,8 @@ def email_schedule():
         )
 
         _registrar_uso_plantilla_email(plantilla_guardada)
-        return jsonify({"success": True, "id": schedule_id, "fecha_programada": run_date.isoformat(), "message": "Envío programado."})
+        return jsonify({"success": True, "id": schedule_id, "fecha_programada": run_date.isoformat(), "tipo": tipo,
+                        "message": "Envío programado." if tipo == "simple" else "Envío recurrente programado (todos los días a esa hora)."})
     except (ValueError, EmailServiceError) as exc:
         return jsonify({"success": False, "message": str(exc)}), 400
     except Exception as exc:
@@ -1357,6 +1374,33 @@ def _email_programacion_error(client, schedule_id, mensaje):
         _email_programacion_estado(client, schedule_id, "error")
 
 
+def _email_proxima_fecha(fecha, ahora):
+    """Siguiente día (a la misma hora) posterior a ahora. Ambas en hora de Colombia, sin zona."""
+    fecha = fecha.replace(tzinfo=None)
+    while fecha <= ahora:
+        fecha += timedelta(days=1)
+    return fecha
+
+
+def _email_reagendar_manana(client, schedule_id, fecha_actual):
+    """Recurrente: tras enviar, queda pendiente para el día siguiente a la misma hora."""
+    from google.cloud import bigquery
+    siguiente = _email_proxima_fecha(fecha_actual, datetime.now(COLOMBIA_TZ).replace(tzinfo=None))
+    client.query(f"""
+        UPDATE `{PROGRAMACION_EMAIL_TABLE}`
+        SET estado = 'pendiente', fecha_programada = @fecha, ultimo_error = NULL,
+            fecha_actualizacion = CURRENT_TIMESTAMP()
+        WHERE id = @id
+    """, job_config=bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("id", "STRING", schedule_id),
+        bigquery.ScalarQueryParameter("fecha", "TIMESTAMP", siguiente.isoformat())])).result()
+    scheduler.add_job(
+        execute_email_schedule, trigger=DateTrigger(run_date=COLOMBIA_TZ.localize(siguiente)),
+        args=[schedule_id], id=f"email_programado_{schedule_id}", replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+
 def execute_email_schedule(schedule_id: str):
     """Job email_programado_<id>: envía una programación de email con los mismos filtros que el envío inmediato."""
     from google.cloud import bigquery
@@ -1382,7 +1426,10 @@ def execute_email_schedule(schedule_id: str):
             prog.get("campana") or "", prog.get("usuario") or "sistema", prog.get("reply_email") or "",
             False, (CONFIG or load_config()).get("email", {}),
         )
-        _email_programacion_estado(client, schedule_id, "enviado")
+        if prog.get("tipo") == "recurrente":
+            _email_reagendar_manana(client, schedule_id, prog["fecha_programada"])
+        else:
+            _email_programacion_estado(client, schedule_id, "enviado")
         log_activity(f"📧 Email programado '{prog.get('campana') or schedule_id}': "
                      f"{resultado['enviados']} enviados (campaña {resultado['campana_id']}).")
     except Exception as exc:
@@ -1411,12 +1458,18 @@ def cargar_programaciones_email_al_iniciar():
     client = bq_client
     try:
         pendientes = list(client.query(
-            f"SELECT id, fecha_programada, campana FROM `{PROGRAMACION_EMAIL_TABLE}` WHERE estado = 'pendiente'"
+            f"SELECT * FROM `{PROGRAMACION_EMAIL_TABLE}` WHERE estado = 'pendiente'"
         ).result())
         ahora = datetime.now(COLOMBIA_TZ)
         for fila in pendientes:
             # Se guardó la hora de Colombia como si fuera UTC: se toma tal cual, como hora de Colombia.
             fecha = COLOMBIA_TZ.localize(fila["fecha_programada"].replace(tzinfo=None))
+            if fila.get("tipo") == "recurrente" and ahora - fecha > timedelta(hours=1):
+                # Recurrente con la app apagada a su hora: sigue al día siguiente.
+                _email_reagendar_manana(client, fila["id"], fila["fecha_programada"])
+                log_activity(f"⚠️ Email recurrente '{fila['campana'] or fila['id']}' no salió el "
+                             f"{fecha:%Y-%m-%d %H:%M} (app apagada): sigue mañana a la misma hora.", "WARNING")
+                continue
             if ahora - fecha > timedelta(hours=1):
                 _email_programacion_error(client, fila["id"], "No se envió: pasó más de 1 hora con la app apagada.")
                 log_activity(f"⚠️ Email programado '{fila['campana'] or fila['id']}' para {fecha:%Y-%m-%d %H:%M} "
@@ -1508,8 +1561,8 @@ def email_editar_programacion(schedule_id):
         job = bq_client.query(f"""
             UPDATE `{PROGRAMACION_EMAIL_TABLE}`
             SET campana = @campana, consulta_sql = @consulta, asunto = @asunto, plantilla = @plantilla,
-                reply_email = @reply, usuario = @usuario, fecha_programada = @fecha,
-                estado = 'pendiente', fecha_actualizacion = CURRENT_TIMESTAMP()
+                reply_email = @reply, usuario = @usuario, fecha_programada = @fecha, tipo = @tipo,
+                estado = 'pendiente', ultimo_error = NULL, fecha_actualizacion = CURRENT_TIMESTAMP()
             WHERE id = @id AND estado NOT IN ('enviando', 'enviado')
         """, job_config=bigquery.QueryJobConfig(query_parameters=[
             bigquery.ScalarQueryParameter("id", "STRING", schedule_id),
@@ -1521,13 +1574,14 @@ def email_editar_programacion(schedule_id):
             bigquery.ScalarQueryParameter("usuario", "STRING", (data.get("usuario") or "").strip()),
             # Hora de Colombia (sin zona), como al programar.
             bigquery.ScalarQueryParameter("fecha", "TIMESTAMP", run_date.isoformat()),
+            bigquery.ScalarQueryParameter("tipo", "STRING", (data.get("tipo") or "simple").strip()),
         ]))
         job.result()
         if not job.num_dml_affected_rows:
             return jsonify({"success": False, "message": "No existe o ya se envió (o se está enviando): no se puede editar."}), 409
     except Exception as exc:
         logger_email.exception(f"❌ Error editando la programación de email {schedule_id}")
-        return jsonify({"success": False, "message": str(exc)}), 500
+        return jsonify({"success": False, "message": _error_columnas_email(exc)}), 500
 
     scheduler.add_job(
         execute_email_schedule, trigger=DateTrigger(run_date=COLOMBIA_TZ.localize(run_date)),

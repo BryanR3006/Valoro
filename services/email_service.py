@@ -462,7 +462,7 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
     resultado = client.crear_campana({
         "name": nombre_campana,
         "subject": traducir_a_member(asunto, mapeo) if asunto else "Sin asunto",
-        "fromAlias": email_config.get("from_alias") or "QNT",
+        "fromAlias": email_config.get("from_alias") or "Valoro",
         "fromEmail": from_email,
         "replyEmail": reply_email or from_email,
         "content": traducir_a_member(plantilla, mapeo),

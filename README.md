@@ -43,7 +43,7 @@ Llaves de `config.json`:
   "email": {                              // email
     "api_key": "",                        // obligatorio para enviar
     "from_email": "",                     // obligatorio: remitente
-    "from_alias": ""                      // opcional: nombre del remitente
+    "from_alias": ""                      // opcional: nombre del remitente (por defecto "Valoro")
     // "field_mapping": {"columna": id}   // opcional: columna -> campo personalizado de la cuenta
   }
 }
@@ -80,11 +80,15 @@ falla queda en estado **error** con el mensaje del error.
 ## Tablas en BigQuery
 
 - `Temporal.SmsLog` (cada SMS), `Temporal.SmsInfobip` (copia de Infobip para el dashboard), `Temporal.EmailLog`, `Temporal.ProgramacionEmail`. Esquemas de SMS en `sms_bigquery_schema.sql`.
-- Para guardar el mensaje de error de las programaciones de email, la tabla necesita la columna `ultimo_error` (sin ella solo cambia el estado):
+- Las programaciones de email necesitan las columnas `tipo` (simple o recurrente) y `ultimo_error` (mensaje del fallo). Correr una vez:
 
   ```sql
-  ALTER TABLE `capable-arbor-209819.Temporal.ProgramacionEmail` ADD COLUMN IF NOT EXISTS ultimo_error STRING;
+  ALTER TABLE `capable-arbor-209819.Temporal.ProgramacionEmail`
+    ADD COLUMN IF NOT EXISTS tipo STRING,
+    ADD COLUMN IF NOT EXISTS ultimo_error STRING;
   ```
+
+- Email recurrente: sale todos los días a la hora de `fecha_programada`. Después de cada envío queda `pendiente` para el día siguiente. Si falla queda en `error` y se reactiva al editarla.
 
 ## Estructura
 
