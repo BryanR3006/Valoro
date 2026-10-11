@@ -1039,7 +1039,7 @@ def config_email():
 # ==================== EMAIL - CAMPOS OBLIGATORIOS ====================
 
 # Programaciones de email (en BigQuery; las de SMS están en SQLite).
-PROGRAMACION_EMAIL_TABLE = "capable-arbor-209819.Temporal.ProgramacionEmail"
+PROGRAMACION_EMAIL_TABLE = "capable-arbor-209819.Temporal.ProgramacionEmail_Valoro"
 
 
 def _faltantes_email(data, *, con_nombre=True, con_asunto=True, con_fecha=False):
@@ -1061,11 +1061,10 @@ def _faltantes_email(data, *, con_nombre=True, con_asunto=True, con_fecha=False)
 
 
 def _error_columnas_email(exc):
-    """Mensaje claro si a ProgramacionEmail le faltan las columnas tipo o ultimo_error (ver README)."""
-    if "Unrecognized name" in str(exc) or "no such field" in str(exc).lower():
-        return ("A la tabla ProgramacionEmail le faltan columnas. Corre en BigQuery: "
-                f"ALTER TABLE `{PROGRAMACION_EMAIL_TABLE}` ADD COLUMN IF NOT EXISTS tipo STRING, "
-                "ADD COLUMN IF NOT EXISTS ultimo_error STRING;")
+    """Mensaje claro si la tabla de programaciones de email no existe o le faltan columnas (ver README)."""
+    if any(x in str(exc) for x in ("Unrecognized name", "Not found: Table", "no such field")):
+        return (f"La tabla {PROGRAMACION_EMAIL_TABLE} no existe o le faltan columnas (tipo, ultimo_error): "
+                "créala con el CREATE TABLE del README.")
     return str(exc)
 
 
