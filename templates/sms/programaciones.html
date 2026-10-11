@@ -1,0 +1,894 @@
+{% extends "layouts/adminlte.html" %}
+
+{% block title %}Historial de Programaciones{% endblock %}
+
+{% block page_title %}
+  <div class="d-flex align-items-center">
+    <div class="mr-3" style="font-size:2rem; color: #3452E1;">
+      <i class="fas fa-clock-history"></i>
+    </div>
+    <div>
+      <h1 class="m-0" style="font-weight:700;">Historial de Programaciones</h1>
+      <small class="text-muted">Lista de todas las programaciones de campañas SMS</small>
+    </div>
+  </div>
+{% endblock %}
+
+{% block breadcrumb %}
+<li><a href="/api/sms/ver_programaciones">Programaciones</a></li>
+<li class="active">Historial</li>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  :root {
+    --sms-primary: #3452E1;
+    --sms-primary-dark: #2438B0;
+    --sms-primary-light: #EEF1FD;
+    --sms-success: #17A673;
+    --sms-success-bg: #E7F8F1;
+    --sms-danger: #E24C4B;
+    --sms-danger-bg: #FCEAEA;
+    --sms-warning: #B8790A;
+    --sms-warning-bg: #FDF2E1;
+    --sms-info: #00B4D8;
+    --sms-info-bg: #E3F6FC;
+    --sms-text: #1C2333;
+    --sms-muted: #6B7280;
+    --sms-border: #E4E7F0;
+    --sms-bg: #F5F6FA;
+    --sms-radius: 16px;
+    --sms-shadow: 0 8px 30px rgba(31, 41, 102, 0.08);
+    --sms-transition: all 0.25s ease;
+  }
+
+  .content-wrapper { background: var(--sms-bg); }
+
+  .sms-container {
+    max-width: 100%;
+    padding: 0 20px;
+  }
+
+  .table-card {
+    background: #ffffff;
+    border: 1px solid var(--sms-border);
+    border-radius: var(--sms-radius);
+    box-shadow: var(--sms-shadow);
+    overflow: hidden;
+  }
+  .table-card .card-header {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--sms-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    background: #FAFAFD;
+  }
+  .table-card .card-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--sms-text);
+  }
+  .table-card .card-header h3 i {
+    color: var(--sms-primary);
+    margin-right: 8px;
+  }
+  .table-card .card-body {
+    padding: 0;
+    overflow-x: auto;
+  }
+  .table-card table {
+    width: 100%;
+    font-size: 0.85rem;
+    border-collapse: collapse;
+    min-width: 1000px;
+  }
+  .table-card table thead {
+    background: #F8FAFC;
+  }
+  .table-card table th {
+    font-weight: 600;
+    color: var(--sms-muted);
+    padding: 12px 16px;
+    border-bottom: 2px solid var(--sms-border);
+    white-space: nowrap;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.5px;
+  }
+  .table-card table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--sms-border);
+    vertical-align: middle;
+  }
+  .table-card table tbody tr {
+    transition: var(--sms-transition);
+  }
+  .table-card table tbody tr:hover {
+    background: var(--sms-primary-light);
+  }
+
+  /* Badges */
+  .badge {
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .badge-success { background: var(--sms-success-bg); color: var(--sms-success); }
+  .badge-danger  { background: var(--sms-danger-bg);  color: var(--sms-danger); }
+  .badge-warning { background: var(--sms-warning-bg); color: var(--sms-warning); }
+  .badge-info    { background: var(--sms-info-bg);    color: var(--sms-info); }
+  .badge-secondary { background: #F1F3F8; color: var(--sms-muted); }
+  .badge-primary { background: var(--sms-primary-light); color: var(--sms-primary); }
+
+  /* Botones */
+  .btn-group .btn {
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    border-radius: 6px;
+    border: none;
+    transition: var(--sms-transition);
+  }
+  .btn-group .btn:hover { transform: scale(1.05); }
+
+  .btn-outline-warning { color: var(--sms-warning); border: 1px solid var(--sms-warning); background: transparent; }
+  .btn-outline-warning:hover { background: var(--sms-warning); color: #fff; }
+  .btn-outline-danger { color: var(--sms-danger); border: 1px solid var(--sms-danger); background: transparent; }
+  .btn-outline-danger:hover { background: var(--sms-danger); color: #fff; }
+  .btn-outline-primary { color: var(--sms-primary); border: 1px solid var(--sms-primary); background: transparent; }
+  .btn-outline-primary:hover { background: var(--sms-primary); color: #fff; }
+  .btn-outline-success { color: var(--sms-success); border: 1px solid var(--sms-success); background: transparent; }
+  .btn-outline-success:hover { background: var(--sms-success); color: #fff; }
+
+  /* Filtros */
+  .filter-bar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .filter-bar select {
+    border: 1.5px solid var(--sms-border);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    background: white;
+    color: var(--sms-text);
+    transition: var(--sms-transition);
+  }
+  .filter-bar select:focus {
+    border-color: var(--sms-primary);
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(52, 82, 225, 0.1);
+  }
+  .filter-bar .btn {
+    padding: 6px 14px;
+    font-size: 0.8rem;
+    border-radius: 8px;
+  }
+
+  .btn-primary { background: var(--sms-primary); color: #fff; }
+  .btn-primary:hover { background: var(--sms-primary-dark); }
+  .btn-outline-secondary { background: #fff; color: var(--sms-muted); border: 1.5px solid var(--sms-border); }
+  .btn-outline-secondary:hover { background: #F0F2F8; color: var(--sms-text); }
+
+  /* Estado vacío */
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--sms-muted); }
+  .empty-state i { font-size: 3rem; display: block; margin-bottom: 16px; opacity: 0.3; }
+  .empty-state p { font-size: 0.95rem; }
+  .empty-state .btn { margin-top: 12px; }
+
+  /* Código */
+  code.text-primary {
+    color: var(--sms-primary);
+    background: var(--sms-primary-light);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  /* ========== MODAL ========== */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 9998;
+    justify-content: center;
+    align-items: center;
+    animation: fadeIn 0.3s ease;
+  }
+  .modal-overlay.active { display: flex; }
+
+  .modal-box {
+    background: #fff;
+    border-radius: var(--sms-radius);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    width: 90%;
+    max-width: 600px;
+    max-height: 90vh;
+    overflow-y: auto;
+    animation: slideUp 0.3s ease;
+    padding: 0;
+  }
+  .modal-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--sms-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #FAFAFD;
+    border-radius: var(--sms-radius) var(--sms-radius) 0 0;
+  }
+  .modal-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--sms-text);
+  }
+  .modal-header h3 i { color: var(--sms-primary); margin-right: 8px; }
+  .modal-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    color: var(--sms-muted);
+    cursor: pointer;
+    padding: 0 8px;
+    transition: var(--sms-transition);
+  }
+  .modal-close:hover { color: var(--sms-danger); transform: rotate(90deg); }
+
+  .modal-body { padding: 24px; }
+  .modal-body .sms-field { margin-bottom: 16px; }
+  .modal-body .sms-field label {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--sms-text);
+    margin-bottom: 5px;
+    display: block;
+  }
+  .modal-body .sms-field label .badge-required {
+    background: var(--sms-danger);
+    color: #fff;
+    font-size: 0.6rem;
+    padding: 1px 8px;
+    border-radius: 20px;
+    margin-left: 4px;
+  }
+  .modal-body .form-control {
+    border: 1.5px solid var(--sms-border);
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 0.9rem;
+    color: var(--sms-text);
+    width: 100%;
+    transition: var(--sms-transition);
+  }
+  .modal-body .form-control:focus {
+    border-color: var(--sms-primary);
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(52, 82, 225, 0.1);
+  }
+  .modal-body textarea.form-control {
+    min-height: 70px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    resize: vertical;
+  }
+  .modal-body .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .modal-body .form-row .sms-field { margin-bottom: 0; }
+
+  .modal-footer {
+    padding: 16px 24px;
+    border-top: 1px solid var(--sms-border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    background: #FAFAFD;
+    border-radius: 0 0 var(--sms-radius) var(--sms-radius);
+  }
+  .modal-footer .btn {
+    padding: 8px 20px;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+  .modal-footer .btn-secondary { background: #F1F3F8; color: var(--sms-muted); border: none; }
+  .modal-footer .btn-secondary:hover { background: #E4E7F0; }
+  .modal-footer .btn-success { background: var(--sms-success); color: #fff; }
+  .modal-footer .btn-success:hover { background: #13895D; }
+
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes slideUp { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+  /* Toast */
+  #smsToastArea {
+    position: fixed;
+    top: 0.6rem;
+    right: 0.6rem;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 350px;
+    width: 100%;
+  }
+  .sms-toast {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.15);
+    padding: 12px 16px;
+    border-left: 5px solid var(--sms-primary);
+    animation: slideIn 0.3s ease;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .sms-toast.success { border-left-color: var(--sms-success); }
+  .sms-toast.danger  { border-left-color: var(--sms-danger); }
+  .sms-toast.warning { border-left-color: var(--sms-warning); }
+  .sms-toast.info    { border-left-color: var(--sms-info); }
+  .sms-toast .icon { font-size: 1.2rem; flex-shrink: 0; margin-top: 2px; }
+  .sms-toast .content { flex: 1; font-size: 0.88rem; color: var(--sms-text); }
+  .sms-toast .close-btn {
+    background: none; border: none; font-size: 1.2rem;
+    color: var(--sms-muted); cursor: pointer; padding: 0 4px;
+  }
+  .sms-toast .close-btn:hover { color: var(--sms-text); }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(30px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+
+  .spinner-sm {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(52,82,225,0.2);
+    border-top-color: var(--sms-primary);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .footer-info {
+    padding: 12px 20px;
+    background: #FAFAFD;
+    border-top: 1px solid var(--sms-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 0.8rem;
+    color: var(--sms-muted);
+  }
+  .footer-info .total { font-weight: 700; color: var(--sms-primary); }
+
+  .text-truncate-cell {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 768px) {
+    .table-card .card-header { flex-direction: column; align-items: stretch; gap: 10px; }
+    .filter-bar { flex-wrap: wrap; }
+    .filter-bar select { flex: 1; min-width: 120px; }
+    .table-card table { font-size: 0.75rem; min-width: 900px; }
+    .table-card table th,
+    .table-card table td { padding: 8px 10px; }
+    .btn-group .btn { padding: 3px 7px; font-size: 0.7rem; }
+    .modal-box { width: 95%; margin: 10px; }
+    .modal-body .form-row { grid-template-columns: 1fr; }
+  }
+  /* Mensaje del error de la última ejecución */
+  .prog-error {
+    margin-top: 4px; max-width: 260px; font-size: 0.72rem; color: var(--danger, #c0392b);
+    white-space: normal; word-break: break-word;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div id="smsToastArea"></div>
+
+<!-- MODAL DE EDICIÓN -->
+<div class="modal-overlay" id="editModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3><i class="fas fa-edit"></i> Editar Programación</h3>
+      <button class="modal-close" id="closeModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="editId">
+      <input type="hidden" id="editOrigen">
+
+      <div class="sms-field">
+        <label>Nombre de la campaña <span class="badge-required">requerido</span></label>
+        <input type="text" class="form-control" id="editCampana" placeholder="Nombre de la campaña">
+      </div>
+
+      <div class="form-row">
+        <div class="sms-field">
+          <label>Tipo de programación <span class="badge-required">requerido</span></label>
+          <select class="form-control" id="editTipo">
+            <option value="simple">Simple (una vez)</option>
+            <option value="recurrente">Recurrente (todos los días)</option>
+          </select>
+        </div>
+        <div class="sms-field">
+          <label>Responsable</label>
+          <input type="text" class="form-control" id="editUsuario" placeholder="Usuario">
+        </div>
+      </div>
+
+      <div class="sms-field" id="editConsultaField">
+        <label>Consulta SQL <span class="badge-required">requerido</span></label>
+        <textarea class="form-control textarea-code" id="editConsultaSql" rows="4" placeholder="SELECT telefono, nombre FROM..."></textarea>
+        <div class="sms-help"><span>Si cambia, se revisa en BigQuery al guardar.</span></div>
+      </div>
+      <div class="sms-field" id="editExcelAviso" style="display:none;">
+        <div class="sms-help"><span><i class="fas fa-file-excel"></i> La base de esta programación salió de un Excel: no se puede cambiar aquí (solo simple).</span></div>
+      </div>
+
+      <div class="sms-field">
+        <label>Constructor de mensaje <span class="badge" style="background:#E2E4EE;color:var(--text-secondary);font-size:0.7rem;">Opcional</span></label>
+        <select class="form-control" id="editMensajeGuardado">
+          <option value="">-- Usar una plantilla SMS guardada --</option>
+        </select>
+      </div>
+
+      <div class="sms-field">
+        <label>Mensaje <span class="badge-required">requerido</span></label>
+        <textarea class="form-control" id="editPlantilla" rows="4" placeholder="Hola {{'{{'}}Nombre Cliente{{'}}'}}, ..."></textarea>
+      </div>
+
+      <div class="form-row" id="editFilaSimple">
+        <div class="sms-field">
+          <label>Fecha y hora de envío <span class="badge-required">requerido</span></label>
+          <input type="datetime-local" class="form-control" id="editFechaProgramada">
+        </div>
+      </div>
+
+      <div class="form-row" id="editFilaRecurrente" style="display:none;">
+        <div class="sms-field">
+          <label>Hora de envío <span class="badge-required">requerido</span></label>
+          <input type="time" class="form-control" id="editHoraInicio">
+        </div>
+        <div class="sms-field">
+          <label>Fecha fin (opcional)</label>
+          <input type="date" class="form-control" id="editFechaFin">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="sms-field">
+          <label>Confirmar reenvío</label>
+          <select class="form-control" id="editConfirmarReenvio">
+            <option value="false">No</option>
+            <option value="true">Sí</option>
+          </select>
+        </div>
+      </div>
+      <div class="sms-help" style="margin-top:4px;"><span><i class="fas fa-info-circle"></i> Al guardar, la programación queda pendiente y se vuelve a agendar.</span></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="cancelEdit">Cancelar</button>
+      <button class="btn btn-success" id="saveEdit">
+        <i class="fas fa-save"></i> Guardar cambios
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- TABLA -->
+<div class="sms-container">
+  <div class="table-card">
+    <div class="card-header">
+      <h3><i class="fas fa-clock-history"></i> Todas las programaciones</h3>
+      <div class="filter-bar">
+        <select id="filtroEstadoProg">
+          <option value="">Todos los estados</option>
+          <option value="pendiente">⏳ Pendiente</option>
+          <option value="enviado">📤 Enviado</option>
+          <option value="completado">✅ Completado</option>
+          <option value="error">⚠️ Error</option>
+          <option value="fallido">❌ Fallido</option>
+          <option value="cancelado">⛔ Cancelado</option>
+        </select>
+        <select id="filtroTipoProg">
+          <option value="">Todos los tipos</option>
+          <option value="simple">📅 Simple</option>
+          <option value="recurrente">🔄 Recurrente</option>
+        </select>
+        <button class="btn btn-outline-secondary btn-sm" id="btnRefrescarProg">
+          <i class="fas fa-sync-alt"></i> Refrescar
+        </button>
+        <a href="/config-sms" class="btn btn-primary btn-sm">
+          <i class="fas fa-plus"></i> Nueva
+        </a>
+      </div>
+    </div>
+    <div class="card-body" id="progListaContainer">
+      <div id="progLista">
+        <div class="text-center text-muted py-5">
+          <i class="fas fa-spinner fa-spin" style="font-size:2rem;"></i>
+          <p class="mt-3">Cargando programaciones...</p>
+        </div>
+      </div>
+    </div>
+    <div class="footer-info" id="footerInfo" style="display:none;">
+      <span><i class="fas fa-info-circle"></i> Total: <span class="total" id="totalCount">0</span> programaciones</span>
+      <span><i class="fas fa-calendar-alt"></i> Actualizado: <span id="updateTime">—</span></span>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+  'use strict';
+
+  // ========== TOAST ==========
+  function showToast(message, type) {
+    const area = document.getElementById('smsToastArea');
+    const toast = document.createElement('div');
+    toast.className = 'sms-toast ' + (type || 'info');
+    const iconMap = {
+      success: 'fa-check-circle',
+      danger: 'fa-exclamation-circle',
+      warning: 'fa-exclamation-triangle',
+      info: 'fa-info-circle'
+    };
+    const icon = iconMap[type] || iconMap.info;
+    toast.innerHTML = `
+      <span class="icon"><i class="fas ${icon}"></i></span>
+      <div class="content">${message}</div>
+      <button class="close-btn" onclick="this.parentElement.remove()">&times;</button>
+    `;
+    area.appendChild(toast);
+    setTimeout(() => { if (toast.parentElement) toast.remove(); }, 5000);
+  }
+
+  // ========== MODAL ==========
+  const modal = document.getElementById('editModal');
+  const closeModalBtn = document.getElementById('closeModal');
+  const cancelEditBtn = document.getElementById('cancelEdit');
+
+  function mostrarCamposTipo() {
+    const recurrente = document.getElementById('editTipo').value === 'recurrente';
+    document.getElementById('editFilaSimple').style.display = recurrente ? 'none' : '';
+    document.getElementById('editFilaRecurrente').style.display = recurrente ? '' : 'none';
+  }
+  document.getElementById('editTipo').addEventListener('change', mostrarCamposTipo);
+
+  // Constructor: plantillas SMS activas (Plantillas SMS).
+  let mensajesGuardados = [];
+  async function cargarMensajesGuardados() {
+    try {
+      const resp = await fetch('/api/sms/mensajes-operacion');
+      const data = await resp.json();
+      mensajesGuardados = data.items || [];
+      document.getElementById('editMensajeGuardado').innerHTML =
+        '<option value="">-- Usar una plantilla SMS guardada --</option>' +
+        mensajesGuardados.map(m => `<option value="${m.id}">${esc(m.operador || '')} · ${esc(m.tipo || '')} · ${esc((m.mensaje || '').substring(0, 60))}</option>`).join('');
+    } catch (e) { /* sin plantillas: se escribe el mensaje a mano */ }
+  }
+  document.getElementById('editMensajeGuardado').addEventListener('change', function() {
+    const m = mensajesGuardados.find(x => String(x.id) === this.value);
+    if (m) document.getElementById('editPlantilla').value = m.mensaje || '';
+  });
+
+  function openModal(data) {
+    const esExcel = data.origen === 'excel';
+    document.getElementById('editId').value            = data.id;
+    document.getElementById('editOrigen').value        = data.origen || 'consulta';
+    document.getElementById('editCampana').value       = data.campana || '';
+    document.getElementById('editTipo').value          = data.tipo_programacion || 'simple';
+    document.getElementById('editTipo').disabled       = esExcel;
+    document.getElementById('editUsuario').value       = data.usuario || '';
+    document.getElementById('editConsultaSql').value   = esExcel ? '' : (data.consulta_sql || '');
+    document.getElementById('editConsultaField').style.display = esExcel ? 'none' : '';
+    document.getElementById('editExcelAviso').style.display = esExcel ? '' : 'none';
+    document.getElementById('editPlantilla').value     = data.plantilla || '';
+    document.getElementById('editMensajeGuardado').value = '';
+    document.getElementById('editHoraInicio').value    = data.hora_inicio || '';
+    document.getElementById('editFechaFin').value      = data.fecha_fin || '';
+    document.getElementById('editConfirmarReenvio').value   = data.confirmar_reenvio ? 'true' : 'false';
+    // fecha_programada viene en hora de Colombia, sin zona: se muestra tal cual.
+    document.getElementById('editFechaProgramada').value = data.fecha_programada ? data.fecha_programada.slice(0, 16) : '';
+    mostrarCamposTipo();
+    modal.classList.add('active');
+  }
+
+  function closeModal() {
+    modal.classList.remove('active');
+  }
+
+  closeModalBtn.addEventListener('click', closeModal);
+  cancelEditBtn.addEventListener('click', closeModal);
+
+  modal.addEventListener('click', function(e) {
+    if (e.target === this) closeModal();
+  });
+
+  // ========== GUARDAR EDICIÓN ==========
+  document.getElementById('saveEdit').addEventListener('click', async function() {
+    const id = document.getElementById('editId').value;
+    const fechaProgramada = document.getElementById('editFechaProgramada').value;
+
+    const tipo = document.getElementById('editTipo').value;
+    const esExcel = document.getElementById('editOrigen').value === 'excel';
+    const data = {
+      campana: document.getElementById('editCampana').value.trim(),
+      tipo_programacion: tipo,
+      usuario: document.getElementById('editUsuario').value.trim(),
+      plantilla: document.getElementById('editPlantilla').value.trim(),
+      hora_inicio: document.getElementById('editHoraInicio').value || null,
+      fecha_fin: document.getElementById('editFechaFin').value || null,
+      confirmar_reenvio: document.getElementById('editConfirmarReenvio').value === 'true',
+      fecha_programada: fechaProgramada || null
+    };
+    if (!esExcel) data.consulta_sql = document.getElementById('editConsultaSql').value.trim();
+
+    // Mismos campos obligatorios que revisa el servidor.
+    const faltan = [];
+    if (!data.campana) faltan.push('nombre de la campaña');
+    if (!esExcel && !data.consulta_sql) faltan.push('consulta SQL');
+    if (!data.plantilla) faltan.push('mensaje');
+    if (tipo === 'simple' && !data.fecha_programada) faltan.push('fecha y hora de envío');
+    if (tipo === 'recurrente' && !data.hora_inicio) faltan.push('hora de envío');
+    if (faltan.length) {
+      showToast('⚠️ Faltan datos obligatorios: ' + faltan.join(', '), 'warning');
+      return;
+    }
+
+    try {
+      this.disabled = true;
+      this.innerHTML = '<span class="spinner-sm"></span> Guardando...';
+
+      const resp = await fetch(`/api/sms/programaciones/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      console.log('Response status:', resp.status);
+      const result = await resp.json();
+
+      if (result.success) {
+        showToast('✅ Programación actualizada correctamente', 'success');
+        closeModal();
+        cargarProgramaciones();
+      } else {
+        showToast('❌ ' + esc(result.message || result.error || 'Error al actualizar'), 'danger');
+      }
+    } catch (e) {
+      showToast('❌ Error: ' + e.message, 'danger');
+    } finally {
+      this.disabled = false;
+      this.innerHTML = '<i class="fas fa-save"></i> Guardar cambios';
+    }
+  });
+
+  // ========== HELPERS ==========
+  function esc(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function fmtFecha(iso) {
+    if (!iso) return '—';
+    try { return new Date(iso).toLocaleString('es-CO'); }
+    catch (e) { return iso; }
+  }
+
+  // ========== CARGAR PROGRAMACIONES ==========
+  async function cargarProgramaciones() {
+    const container = document.getElementById('progLista');
+    if (!container) return;
+
+    const estado = document.getElementById('filtroEstadoProg')?.value || '';
+    const tipo   = document.getElementById('filtroTipoProg')?.value || '';
+
+    container.innerHTML = `
+      <div class="text-center text-muted py-5">
+        <i class="fas fa-spinner fa-spin" style="font-size:2rem;"></i>
+        <p class="mt-3">Cargando programaciones...</p>
+      </div>
+    `;
+    document.getElementById('footerInfo').style.display = 'none';
+
+    try {
+      let url = '/api/sms/programaciones';
+      const params = new URLSearchParams();
+      if (estado) params.append('estado', estado);
+      if (tipo) params.append('tipo_programacion', tipo);
+      if (params.toString()) url += '?' + params.toString();
+
+      const resp = await fetch(url);
+      const data = await resp.json();
+
+      const rows = data.data || data.items || [];
+      if (!data.success || !rows || rows.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <i class="fas fa-inbox"></i>
+            <p>No hay programaciones registradas</p>
+            <a href="/config-sms" class="btn btn-primary btn-sm">
+              <i class="fas fa-plus"></i> Crear programación
+            </a>
+          </div>
+        `;
+        document.getElementById('footerInfo').style.display = 'none';
+        return;
+      }
+
+      document.getElementById('footerInfo').style.display = 'flex';
+      document.getElementById('totalCount').textContent = rows.length;
+      document.getElementById('updateTime').textContent = new Date().toLocaleString('es-CO');
+
+      let html = `
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Campaña</th>
+              <th>Usuario</th>
+              <th>Tipo</th>
+              <th>Fecha Prog.</th>
+              <th>Hora Inicio</th>
+              <th>Fecha Fin</th>
+              <th>Últ. Ejecución</th>
+              <th>Dest.</th>
+              <th>Estado</th>
+              <th style="text-align:center;">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      rows.forEach(prog => {
+        const tipoBadge = prog.tipo_programacion === 'recurrente'
+          ? '<span class="badge badge-info"><i class="fas fa-sync-alt"></i> Recurrente</span>'
+          : '<span class="badge badge-success"><i class="fas fa-clock"></i> Simple</span>';
+
+        const estadoMap = {
+          'pendiente':  '<span class="badge badge-warning"><i class="fas fa-hourglass-half"></i> Pendiente</span>',
+          'enviado':    '<span class="badge badge-success"><i class="fas fa-check-circle"></i> Enviado</span>',
+          'completado': '<span class="badge badge-success" style="background:#17A673;color:#fff;"><i class="fas fa-check-double"></i> Completado</span>',
+          'fallido':    '<span class="badge badge-danger"><i class="fas fa-times-circle"></i> Fallido</span>',
+          'error':      '<span class="badge badge-danger"><i class="fas fa-exclamation-triangle"></i> Error</span>',
+          'cancelado':  '<span class="badge badge-secondary"><i class="fas fa-ban"></i> Cancelado</span>'
+        };
+        // Si la ejecución falló, el mensaje del error queda debajo del estado.
+        const estadoHtml = (estadoMap[prog.estado] || `<span class="badge badge-secondary">${esc(prog.estado)}</span>`) +
+          (prog.ultimo_error ? `<div class="prog-error" title="${esc(prog.ultimo_error)}">${esc(prog.ultimo_error)}</div>` : '');
+
+        const puedeEliminar   = ['pendiente','completado','fallido','error','cancelado'].includes(prog.estado);
+        const puedeReintentar = ['fallido','error','cancelado'].includes(prog.estado);
+
+        html += `
+          <tr>
+            <td><code class="text-primary">#${prog.id}</code></td>
+            <td><strong class="text-truncate-cell" title="${esc(prog.campana)}">${esc(prog.campana) || '—'}</strong></td>
+            <td>${esc(prog.usuario) || '—'}</td>
+            <td>${tipoBadge}</td>
+            <td>${fmtFecha(prog.fecha_programada)}</td>
+            <td>${esc(prog.hora_inicio) || '—'}</td>
+            <td>${esc(prog.fecha_fin) || '—'}</td>
+            <td>${fmtFecha(prog.fecha_ejecucion)}</td>
+            <td>${prog.total_destinatarios || 0}</td>
+            <td>${estadoHtml}</td>
+            <td style="text-align:center;">
+              <div class="btn-group" role="group" style="display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:center;">
+                <button class="btn btn-outline-primary btn-sm editar-prog" data-id="${prog.id}" title="Editar">
+                  <i class="fas fa-edit"></i>
+                </button>
+                ${puedeEliminar ? `<button class="btn btn-outline-danger btn-sm eliminar-prog" data-id="${prog.id}" title="Eliminar"><i class="fas fa-trash"></i></button>` : ''}
+                ${puedeReintentar ? `<button class="btn btn-outline-success btn-sm reejecutar-prog" data-id="${prog.id}" title="Reintentar"><i class="fas fa-redo-alt"></i></button>` : ''}
+              </div>
+            </td>
+          </tr>
+        `;
+      });
+
+      html += `</tbody></table>`;
+      container.innerHTML = html;
+
+      // ========== EVENTOS ==========
+      // Editar
+      container.querySelectorAll('.editar-prog').forEach(btn => {
+        btn.addEventListener('click', function() {
+          const id = this.dataset.id;
+          const prog = rows.find(p => String(p.id) === String(id));
+          if (prog) openModal(prog);
+        });
+      });
+
+      // Eliminar
+      container.querySelectorAll('.eliminar-prog').forEach(btn => {
+        btn.addEventListener('click', async function(e) {
+          e.stopPropagation();
+          const id = this.dataset.id;
+          if (!confirm(`¿Eliminar permanentemente la programación #${id}?`)) return;
+
+          try {
+            const resp = await fetch(`/api/sms/programaciones/${id}`, { method: 'DELETE' });
+            const data = await resp.json();
+            if (data.success) {
+              showToast('✅ Programación eliminada', 'success');
+              cargarProgramaciones();
+            } else {
+              showToast('❌ ' + (data.error || 'Error'), 'danger');
+            }
+          } catch (e) {
+            showToast('❌ Error: ' + e.message, 'danger');
+          }
+        });
+      });
+
+      // Reintentar
+      container.querySelectorAll('.reejecutar-prog').forEach(btn => {
+        btn.addEventListener('click', async function(e) {
+          e.stopPropagation();
+          const id = this.dataset.id;
+          if (!confirm(`¿Reintentar la programación #${id}?`)) return;
+
+          try {
+            const resp = await fetch(`/api/sms/programaciones/${id}/reejecutar`, { method: 'POST' });
+            const data = await resp.json();
+            if (data.success) {
+              showToast('✅ Reintento programado', 'success');
+              cargarProgramaciones();
+            } else {
+              showToast('❌ ' + (data.error || 'Error'), 'danger');
+            }
+          } catch (e) {
+            showToast('❌ Error: ' + e.message, 'danger');
+          }
+        });
+      });
+
+    } catch (e) {
+      container.innerHTML = `
+        <div class="alert alert-danger m-3" style="border-radius:8px;">
+          <i class="fas fa-exclamation-triangle"></i> Error al cargar: ${e.message}
+        </div>
+      `;
+    }
+  }
+
+  // ========== FILTROS ==========
+  document.getElementById('filtroEstadoProg')?.addEventListener('change', cargarProgramaciones);
+  document.getElementById('filtroTipoProg')?.addEventListener('change', cargarProgramaciones);
+  document.getElementById('btnRefrescarProg')?.addEventListener('click', cargarProgramaciones);
+
+  // ========== CARGAR AL INICIAR ==========
+  cargarProgramaciones();
+  cargarMensajesGuardados();
+
+})();
+</script>
+{% endblock %}

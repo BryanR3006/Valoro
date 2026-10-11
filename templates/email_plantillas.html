@@ -1,0 +1,273 @@
+{% extends "layouts/adminlte.html" %}
+{% block title %}Plantillas email{% endblock %}
+{% block page_title %}Plantillas de email{% endblock %}
+{% block page_subtitle %}<small class="text-muted">Asunto y HTML guardados para elegir en Enviar Email. Usa <code>{{ '{{' }}columna{{ '}}' }}</code> para los datos de cada cliente.</small>{% endblock %}
+
+{% block extra_css %}
+<style>
+  .pl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+  .pl-html { font-family: monospace; font-size: .82rem; min-height: 280px; }
+  .pl-vista { width: 100%; min-height: 360px; border: 1px dashed #cbd5e1; border-radius: 8px; background: #fff; }
+  .pl-asunto-vista { background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 8px 12px; font-size: .9rem; margin-bottom: 10px; }
+  .pl-var { font-family: monospace; font-size: .78rem; background: #eef2f7; border-radius: 4px; padding: 0 4px; margin: 0 3px 3px 0; display: inline-block; }
+  .pl-inactiva td { opacity: .55; }
+  .d-none { display: none !important; }
+  .ml-auto { margin-left: auto !important; }
+  .small { font-size: .82rem; }
+  .form-check { display: flex; align-items: center; gap: 6px; }
+  .form-check-label { margin: 0; font-size: .85rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="smsToastArea"></div>
+
+<div class="pl-grid">
+  <!-- NUEVA / EDITAR -->
+  <div class="card card-outline card-primary mb-0">
+    <div class="card-header d-flex align-items-center">
+      <h3 class="card-title" id="plTitulo"><i class="fas fa-plus mr-1"></i> Nueva plantilla</h3>
+      <button type="button" class="btn btn-outline-secondary btn-sm ml-auto" id="plNueva"><i class="fas fa-plus"></i> Nueva</button>
+    </div>
+    <div class="card-body">
+      <div class="form-group">
+        <label for="plNombre">Nombre <span class="text-danger">*</span></label>
+        <input id="plNombre" class="form-control" maxlength="120" placeholder="Ej: Cobro RBK no positivos">
+      </div>
+      <div class="form-group">
+        <label for="plAsunto">Asunto</label>
+        <input id="plAsunto" class="form-control" maxlength="255" placeholder="Ej: {{ '{{' }}nombre{{ '}}' }}, tienes una oferta para ponerte al día">
+      </div>
+      <div class="form-group">
+        <label for="plHtml">HTML <span class="text-danger">*</span></label>
+        <textarea id="plHtml" class="form-control pl-html" placeholder="<h1>Hola {{ '{{' }}nombre{{ '}}' }}</h1>&#10;<p>Tu saldo es {{ '{{' }}valor_pagar{{ '}}' }}.</p>"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Variables</label>
+        <div id="plVariables" class="small text-muted">—</div>
+      </div>
+      <div class="form-group" style="max-width:280px;">
+        <label for="plUsuario">Responsable</label>
+        <input id="plUsuario" class="form-control" placeholder="Tu nombre" value="{{ session.get('user', '') }}">
+      </div>
+      <div class="d-flex" style="gap:8px;">
+        <button type="button" class="btn btn-primary" id="plGuardar"><i class="fas fa-save mr-1"></i> Guardar</button>
+        <button type="button" class="btn btn-outline-secondary d-none" id="plCancelar">Cancelar edición</button>
+      </div>
+      <p class="text-muted small mt-3 mb-0">
+        Si una plantilla ya se usó, al cambiar su asunto o HTML se guarda como una nueva
+        (<em>nombre v2</em>) para que lo enviado antes no cambie.
+      </p>
+    </div>
+  </div>
+
+  <!-- VISTA PREVIA -->
+  <div class="card card-outline card-secondary mb-0">
+    <div class="card-header">
+      <h3 class="card-title"><i class="fas fa-eye mr-1"></i> Vista previa <small class="text-muted">(las variables se ven como [nombre])</small></h3>
+    </div>
+    <div class="card-body">
+      <div class="pl-asunto-vista"><strong>Asunto:</strong> <span id="plAsuntoVista" class="text-muted">—</span></div>
+      <iframe id="plVista" class="pl-vista" sandbox="" title="Vista previa del correo"></iframe>
+    </div>
+  </div>
+</div>
+
+<!-- LISTA -->
+<div class="card card-outline card-primary mt-3">
+  <div class="card-header d-flex align-items-center">
+    <h3 class="card-title"><i class="fas fa-list mr-1"></i> Plantillas</h3>
+    <div class="form-check ml-auto">
+      <input class="form-check-input" type="checkbox" id="plVerInactivas">
+      <label class="form-check-label" for="plVerInactivas">Ver desactivadas</label>
+    </div>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead>
+          <tr><th>Nombre</th><th>Asunto</th><th>Variables</th><th class="text-right">Usos</th><th>Último uso</th><th>Estado</th><th>Acciones</th></tr>
+        </thead>
+        <tbody id="plLista"><tr><td colspan="7" class="text-muted p-3">Cargando…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{% raw %}
+<script>
+(function () {
+  'use strict';
+
+  const $ = id => document.getElementById(id);
+  const nombreEl = $('plNombre'), asuntoEl = $('plAsunto'), htmlEl = $('plHtml'), usuarioEl = $('plUsuario');
+  let plantillas = [];
+  let editandoId = null;
+
+  function showToast(message, type) {
+    const icons = { success: 'fa-check-circle', danger: 'fa-exclamation-circle', warning: 'fa-exclamation-triangle', info: 'fa-info-circle' };
+    const toast = document.createElement('div');
+    toast.className = 'sms-toast ' + (type || 'info');
+    toast.innerHTML = `<span class="icon"><i class="fas ${icons[type] || icons.info}"></i></span>
+      <div class="content"></div><button class="close-btn" onclick="this.parentElement.remove()">&times;</button>`;
+    toast.querySelector('.content').textContent = message;
+    $('smsToastArea').appendChild(toast);
+    setTimeout(() => toast.remove(), 6000);
+  }
+
+  async function api(url, metodo, cuerpo) {
+    const resp = await fetch(url, { method: metodo || 'GET', headers: { 'Content-Type': 'application/json' },
+                                    body: cuerpo ? JSON.stringify(cuerpo) : undefined });
+    const texto = await resp.text();
+    let data;
+    try { data = JSON.parse(texto); } catch (e) { throw new Error(`Error del servidor (HTTP ${resp.status}).`); }
+    data._status = resp.status;
+    return data;
+  }
+
+  // Igual que variables_de_plantilla: sin repetir, en orden de aparición.
+  function variables(texto) {
+    const vistas = new Set(), lista = [];
+    for (const m of texto.matchAll(/{{\s*([^{}]+?)\s*}}/g)) {
+      const v = m[1].trim();
+      if (!vistas.has(v.toLowerCase())) { vistas.add(v.toLowerCase()); lista.push(v); }
+    }
+    return lista;
+  }
+  const conMarcas = texto => texto.replace(/{{\s*([^{}]+?)\s*}}/g, (_, v) => `[${v.trim()}]`);
+
+  function pintarVariables(contenedor, lista) {
+    contenedor.innerHTML = '';
+    if (!lista.length) { contenedor.textContent = '—'; return; }
+    lista.forEach(v => contenedor.appendChild(Object.assign(document.createElement('span'), { className: 'pl-var', textContent: v })));
+  }
+
+  function actualizarVista() {
+    $('plAsuntoVista').textContent = asuntoEl.value.trim() ? conMarcas(asuntoEl.value) : '—';
+    $('plVista').srcdoc = conMarcas(htmlEl.value) || '<p style="color:#94a3b8;font-family:sans-serif">Escribe el HTML…</p>';
+    pintarVariables($('plVariables'), variables(`${asuntoEl.value} ${htmlEl.value}`));
+  }
+  [nombreEl, asuntoEl, htmlEl].forEach(el => el.addEventListener('input', actualizarVista));
+
+  function limpiar() {
+    editandoId = null;
+    nombreEl.value = asuntoEl.value = htmlEl.value = '';
+    $('plTitulo').innerHTML = '<i class="fas fa-plus mr-1"></i> Nueva plantilla';
+    $('plCancelar').classList.add('d-none');
+    actualizarVista();
+  }
+
+  function editar(p) {
+    editandoId = p.id;
+    nombreEl.value = p.nombre; asuntoEl.value = p.asunto; htmlEl.value = p.html;
+    $('plTitulo').innerHTML = '<i class="fas fa-pen mr-1"></i> Editar plantilla';
+    if (p.usos) $('plTitulo').appendChild(Object.assign(document.createElement('small'),
+      { className: 'text-muted', textContent: ` (usada ${p.usos} vez/veces)` }));
+    $('plCancelar').classList.remove('d-none');
+    actualizarVista();
+    nombreEl.focus();
+  }
+
+  async function guardar() {
+    const cuerpo = { nombre: nombreEl.value.trim(), asunto: asuntoEl.value.trim(), html: htmlEl.value.trim(), usuario: usuarioEl.value.trim() };
+    if (!cuerpo.nombre) { showToast('Escribe el nombre', 'warning'); return; }
+    if (!cuerpo.html) { showToast('El HTML no puede estar vacío', 'warning'); return; }
+    try {
+      let data = await api(editandoId ? `/api/email/plantillas/${editandoId}` : '/api/email/plantillas', editandoId ? 'PUT' : 'POST', cuerpo);
+      if (data._status === 409 && data.requiere_nueva) {
+        if (!confirm(`${data.message}\n\nSe creará "${data.nombre_nueva}".`)) return;
+        data = await api(`/api/email/plantillas/${editandoId}`, 'PUT', { ...cuerpo, como_nueva: true });
+      }
+      if (!data.success) throw new Error(data.message || 'No se pudo guardar');
+      showToast(data.nueva ? `Guardada como nueva: ${data.plantilla.nombre}` : `Plantilla guardada: ${data.plantilla.nombre}`, 'success');
+      limpiar();
+      cargar();
+    } catch (err) {
+      showToast(err.message, 'danger');
+    }
+  }
+
+  async function accion(url, cuerpo, mensaje) {
+    try {
+      const data = await api(url, 'POST', cuerpo);
+      if (!data.success) throw new Error(data.message || 'Error');
+      showToast(mensaje(data.plantilla), 'success');
+      cargar();
+    } catch (err) {
+      showToast(err.message, 'danger');
+    }
+  }
+
+  function boton(icono, texto, clase, fn) {
+    const b = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-accion' + (clase ? ' ' + clase : '') });
+    b.innerHTML = `<i class="fas ${icono}"></i> `;
+    b.appendChild(document.createTextNode(texto));
+    b.addEventListener('click', fn);
+    return b;
+  }
+
+  function celda(texto, clase) {
+    return Object.assign(document.createElement('td'), { textContent: texto ?? '', className: clase || '' });
+  }
+
+  function pintar() {
+    const body = $('plLista');
+    body.innerHTML = '';
+    if (!plantillas.length) {
+      body.innerHTML = '<tr><td colspan="7" class="text-muted p-3">Todavía no hay plantillas.</td></tr>';
+      return;
+    }
+    plantillas.forEach(p => {
+      const tr = document.createElement('tr');
+      if (!p.activa) tr.className = 'pl-inactiva';
+      tr.appendChild(celda(p.nombre, 'font-weight-bold'));
+      tr.appendChild(celda(p.asunto || '—', 'small'));
+      const tdVars = document.createElement('td');
+      pintarVariables(tdVars, p.variables);
+      tr.appendChild(tdVars);
+      tr.appendChild(celda(p.usos, 'text-right'));
+      tr.appendChild(celda(p.fecha_ultimo_uso || '—', 'small'));
+      const tdEstado = document.createElement('td');
+      tdEstado.appendChild(Object.assign(document.createElement('span'),
+        { className: 'badge ' + (p.activa ? 'badge-success' : 'badge-secondary'), textContent: p.activa ? 'Activa' : 'Desactivada' }));
+      tr.appendChild(tdEstado);
+      const tdAcc = document.createElement('td');
+      const acciones = Object.assign(document.createElement('div'), { className: 'acciones-fila' });
+      acciones.appendChild(boton('fa-pen', 'Editar', '', () => editar(p)));
+      acciones.appendChild(boton('fa-copy', 'Duplicar', '', () => accion(`/api/email/plantillas/${p.id}/duplicar`,
+        { usuario: usuarioEl.value.trim() }, x => `Duplicada: ${x.nombre}`)));
+      acciones.appendChild(boton(p.activa ? 'fa-ban' : 'fa-check', p.activa ? 'Desactivar' : 'Activar', p.activa ? 'peligro' : '',
+        () => accion(`/api/email/plantillas/${p.id}/activa`, { activa: !p.activa },
+                     x => `${x.nombre}: ${x.activa ? 'activada' : 'desactivada'}`)));
+      tdAcc.appendChild(acciones);
+      tr.appendChild(tdAcc);
+      body.appendChild(tr);
+    });
+  }
+
+  async function cargar() {
+    try {
+      const data = await api(`/api/email/plantillas${$('plVerInactivas').checked ? '?todas=1' : ''}`);
+      if (!data.success) throw new Error(data.message || 'Error leyendo plantillas');
+      plantillas = data.plantillas;
+      pintar();
+    } catch (err) {
+      $('plLista').innerHTML = '';
+      const tr = document.createElement('tr');
+      tr.appendChild(Object.assign(celda('❌ ' + err.message), { colSpan: 7 }));
+      $('plLista').appendChild(tr);
+    }
+  }
+
+  $('plGuardar').addEventListener('click', guardar);
+  $('plCancelar').addEventListener('click', limpiar);
+  $('plNueva').addEventListener('click', limpiar);
+  $('plVerInactivas').addEventListener('change', cargar);
+  limpiar();
+  cargar();
+})();
+</script>
+{% endraw %}
+{% endblock %}

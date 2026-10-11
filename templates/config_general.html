@@ -1,0 +1,171 @@
+{% extends "layouts/adminlte.html" %}
+{% block title %}Parámetros generales{% endblock %}
+{% block page_title %}Parámetros generales{% endblock %}
+{% block page_subtitle %}<small class="text-muted">Configuración global de la aplicación</small>{% endblock %}
+{% block breadcrumb %}<li class="breadcrumb-item active">Parámetros generales</li>{% endblock %}
+
+{% block content %}
+{% if error %}
+<div class="alert alert-danger alert-dismissible fade show">
+    {{ error }}
+    <button type="button" class="close" data-dismiss="alert"><span>&times;</span></button>
+</div>
+{% endif %}
+
+<form id="generalParamsForm" onsubmit="event.preventDefault(); saveGeneralParameters();">
+    <div class="card card-outline card-info mb-3">
+        <div class="card-header">
+            <h3 class="card-title">Mensaje en consola</h3>
+        </div>
+        <div class="card-body">
+            <p class="text-muted">
+                Escribe en la terminal <code>Revisando programaciones de SMS y email...</code>
+                cada N segundos (por defecto 60 = 1 minuto), para saber que la aplicación sigue viva.
+                No envía nada.
+            </p>
+            <div class="form-group">
+                <label for="consoleMessageSeconds">
+                    Intervalo del mensaje <span class="text-muted">(segundos)</span>
+                </label>
+                <input
+                    type="number"
+                    id="consoleMessageSeconds"
+                    class="form-control col-md-4"
+                    min="{{ limits.console_message_interval_seconds_min }}"
+                    max="{{ limits.console_message_interval_seconds_max }}"
+                    value="{{ parameters.console_message_interval_seconds }}"
+                />
+                <small class="form-text text-muted" id="consoleHint">
+                    Mínimo {{ limits.console_message_interval_seconds_min }} s (1 minuto).
+                </small>
+            </div>
+        </div>
+    </div>
+
+    <div class="card card-outline card-secondary mb-3">
+        <div class="card-header">
+            <h3 class="card-title">Retención de archivos de log</h3>
+        </div>
+        <div class="card-body">
+            <p class="text-muted">
+                Tiempo que se conservan los archivos <code>execution_log_backup_*.txt</code> generados al rotar el log.
+                Los más antiguos se eliminan automáticamente. El archivo activo <code>execution_log.txt</code> no se borra.
+            </p>
+            <div class="form-group">
+                <label for="logRetentionHours">
+                    Horas de retención <span class="text-muted">(horas)</span>
+                </label>
+                <input
+                    type="number"
+                    id="logRetentionHours"
+                    class="form-control col-md-4"
+                    min="{{ limits.log_retention_hours_min }}"
+                    max="{{ limits.log_retention_hours_max }}"
+                    value="{{ parameters.log_retention_hours }}"
+                />
+                <small class="form-text text-muted" id="retentionHint">
+                    Mínimo {{ limits.log_retention_hours_min }} h,
+                    máximo {{ limits.log_retention_hours_max }} h
+                    ({{ parameters.log_retention_hours // 24 }} días con el valor actual).
+                </small>
+            </div>
+        </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">
+        <i class="fas fa-save"></i> Guardar cambios
+    </button>
+    <div id="generalResult" class="mt-3"></div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const RETENTION_LIMITS = {
+        min: {{ limits.log_retention_hours_min }},
+        max: {{ limits.log_retention_hours_max }},
+    };
+    const CONSOLE_LIMITS = {
+        min: {{ limits.console_message_interval_seconds_min }},
+        max: {{ limits.console_message_interval_seconds_max }},
+    };
+
+    function setResult(message, success) {
+        const el = document.getElementById('generalResult');
+        el.textContent = message;
+        el.className = success ? 'mt-3 text-success' : 'mt-3 text-danger';
+    }
+
+    function updateRetentionHint(hours) {
+        const days = Math.floor(hours / 24);
+        const rem = hours % 24;
+        let text = days > 0 ? `${days} día(s)` : '';
+        if (rem > 0) text += (text ? ' y ' : '') + `${rem} h`;
+        if (!text) text = `${hours} h`;
+        document.getElementById('retentionHint').textContent =
+            `Mínimo ${RETENTION_LIMITS.min} h, máximo ${RETENTION_LIMITS.max} h. ${text}.`;
+    }
+
+    document.getElementById('logRetentionHours').addEventListener('input', function () {
+        const v = parseInt(this.value, 10);
+        if (!isNaN(v)) updateRetentionHint(v);
+    });
+
+    function updateConsoleHint(seconds) {
+        const mins = Math.floor(seconds / 60);
+        document.getElementById('consoleHint').textContent =
+            `Mínimo ${CONSOLE_LIMITS.min} s. ${mins > 0 ? mins + ' min' : seconds + ' s'} con el valor actual.`;
+    }
+
+    document.getElementById('consoleMessageSeconds').addEventListener('input', function () {
+        const v = parseInt(this.value, 10);
+        if (!isNaN(v)) updateConsoleHint(v);
+    });
+
+    async function saveGeneralParameters() {
+        const consoleSeconds = parseInt(document.getElementById('consoleMessageSeconds').value, 10);
+        const hours = parseInt(document.getElementById('logRetentionHours').value, 10);
+        if (isNaN(consoleSeconds) || consoleSeconds < CONSOLE_LIMITS.min || consoleSeconds > CONSOLE_LIMITS.max) {
+            setResult(`Mensaje consola: entre ${CONSOLE_LIMITS.min} y ${CONSOLE_LIMITS.max} segundos.`, false);
+            return;
+        }
+        if (isNaN(hours) || hours < RETENTION_LIMITS.min || hours > RETENTION_LIMITS.max) {
+            setResult(`Retención: ingrese un valor entre ${RETENTION_LIMITS.min} y ${RETENTION_LIMITS.max} horas.`, false);
+            return;
+        }
+        setResult('Guardando...', true);
+        try {
+            const resp = await fetch('/config-general/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    console_message_interval_seconds: consoleSeconds,
+                    log_retention_hours: hours,
+                }),
+            });
+            const data = await resp.json();
+            if (data.success) {
+                document.getElementById('consoleMessageSeconds').value =
+                    data.parameters.console_message_interval_seconds;
+                document.getElementById('logRetentionHours').value =
+                    data.parameters.log_retention_hours;
+                updateConsoleHint(data.parameters.console_message_interval_seconds);
+                updateRetentionHint(data.parameters.log_retention_hours);
+                let msg = data.message + ' Mensaje consola: cada ' +
+                    (data.console_message_interval_seconds || data.parameters.console_message_interval_seconds) + ' s.';
+                if (data.logs_deleted && data.logs_deleted.length) {
+                    msg += ' Logs eliminados: ' + data.logs_deleted.join(', ');
+                }
+                setResult(msg, true);
+            } else {
+                setResult(data.message || 'Error al guardar.', false);
+            }
+        } catch (e) {
+            setResult('Error de red: ' + e.message, false);
+        }
+    }
+
+    updateConsoleHint({{ parameters.console_message_interval_seconds }});
+    updateRetentionHint({{ parameters.log_retention_hours }});
+</script>
+{% endblock %}

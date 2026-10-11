@@ -1,0 +1,36 @@
+venv/
+__pycache__/
+*.pyc
+
+token.json
+credentials.json
+
+config/google_key.json
+config/credentials.json
+
+downloads/
+app.db
+# Copias de la base (datos de clientes, no subir)
+app_backup_*.db
+app.db.antes_*
+app_log.txt
+app_log.txt.*
+
+# Logs: cada PC escribe los suyos; no van en git
+*.log
+*.log.*
+logs/
+execution_log.txt
+execution_log.txt.*
+execution_log_backup_*.txt
+
+# Credenciales: cada copia tiene su config.json (plantilla: config.example.json)
+config.json
+
+# Archivos subidos (bases): no van en git
+uploads/
+
+# Archivos que escribe la app al enviar SMS (bulk ids reales, cache): no van en git
+bulk_ids_registrados.txt
+dashboard_cache.json
+

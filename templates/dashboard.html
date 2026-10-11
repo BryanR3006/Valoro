@@ -1,0 +1,464 @@
+{% extends "layouts/adminlte.html" %}
+
+{% block title %}Dashboard SMS{% endblock %}
+{% block page_title %}Dashboard SMS{% endblock %}
+{% block page_subtitle %}Todos los SMS de la cuenta de Infobip: entrega, operadores, costo y errores. Por defecto, hoy.{% endblock %}
+
+{% block extra_css %}
+<style>
+  /* Estados con la paleta de estado (siempre con su etiqueta, nunca solo color). */
+  .ds {
+    --surface-1: #fcfcfb; --ink-1: #0b0b0b; --ink-2: #52514e; --ink-muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7;
+    --e-entregado: #0ca30c; --e-fallido: #d03b3b; --e-pendiente: #fab219; --e-sin-reporte: #c3c2b7;
+    color: var(--ink-1);
+  }
+  .content-wrapper { min-width: 0; }  /* que las tablas anchas no estiren la página */
+  .ds-filtros { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 16px; }
+  .ds-filtros label { display: block; font-size: .75rem; color: var(--ink-2); margin-bottom: 2px; }
+  .ds-filtros .form-control { width: auto; }
+  .ds-presets { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ds-presets .btn.activo { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .ds-estado { font-size: .78rem; color: var(--ink-muted); margin-left: auto; text-align: right; }
+  .ds-aviso { background: #fff8e6; border: 1px solid #f3d27a; border-radius: 10px; padding: 10px 14px; font-size: .85rem; margin-bottom: 16px; }
+  .ds-aviso.error { background: #fdecec; border-color: #f0a8a8; }
+  .ds-hero { display: grid; grid-template-columns: minmax(240px, 1fr) 3fr; gap: 16px; margin-bottom: 16px; }
+  .ds-hero > *, .ds-grid2 > * { min-width: 0; }
+  .ds-card { min-width: 0; background: var(--surface-1); border: 1px solid rgba(11,11,11,.10); border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; }
+  .ds-grid2 .ds-card, .ds-hero .ds-card { margin-bottom: 0; }
+  .ds-card h3 { font-size: .95rem; font-weight: 700; margin: 0 0 4px; }
+  .ds-sub { font-size: .78rem; color: var(--ink-2); margin-bottom: 10px; }
+  .ds-hero-num { font-size: 56px; font-weight: 700; line-height: 1; }
+  .ds-hero-lbl { font-size: .85rem; color: var(--ink-2); margin-top: 6px; }
+  .ds-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .ds-tile { border: 1px solid rgba(11,11,11,.08); border-radius: 10px; padding: 10px 12px; background: #fff; }
+  .ds-tile .v { font-size: 1.4rem; font-weight: 700; line-height: 1.15; }
+  .ds-tile .l { font-size: .75rem; color: var(--ink-2); }
+  .ds-tile .s { font-size: .72rem; color: var(--ink-muted); }
+  .ds-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; }
+  .ds-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; margin-bottom: 16px; }
+  .ds-chart { position: relative; height: 280px; }
+  .ds-leyenda { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .78rem; color: var(--ink-2); margin-bottom: 8px; }
+  .ds-tabla { width: 100%; font-size: .8rem; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .ds-tabla th { text-align: left; font-weight: 600; color: var(--ink-2); border-bottom: 1px solid var(--grid); padding: 6px 8px; white-space: nowrap; position: sticky; top: 0; background: var(--surface-1); }
+  .ds-tabla th.ordenable { cursor: pointer; }
+  .ds-tabla td { border-bottom: 1px solid #f0efec; padding: 5px 8px; white-space: nowrap; }
+  .ds-tabla td.texto { white-space: normal; min-width: 240px; max-width: 420px; color: var(--ink-2); }
+  .ds-tabla .n { text-align: right; }
+  .ds-scroll { overflow-x: auto; max-height: 480px; overflow-y: auto; }
+  .ds-filtros-det { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .ds-filtros-det .form-control { width: auto; max-width: 240px; }
+  details.ds-ver-tabla { margin-top: 8px; font-size: .8rem; }
+  details.ds-ver-tabla summary { cursor: pointer; color: var(--ink-2); }
+  .ds-vacio { text-align: center; color: var(--ink-muted); padding: 30px 10px; }
+  .ds-paginas { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: .8rem; color: var(--ink-2); }
+  @media (max-width: 900px) { .ds-hero { grid-template-columns: 1fr; } .ds-grid2 { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="smsToastArea"></div>
+<div class="ds" id="ds">
+  <div class="ds-filtros">
+    <div>
+      <label>Periodo</label>
+      <div class="ds-presets" id="dsPresets">
+        <button type="button" class="btn btn-outline-secondary btn-sm activo" data-periodo="hoy">Hoy</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-periodo="ayer">Ayer</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-periodo="48h">Últimas 48 horas</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-periodo="7d">7 días</button>
+      </div>
+    </div>
+    <div><label for="dsDesde">Desde</label><input type="date" id="dsDesde" class="form-control form-control-sm"></div>
+    <div><label for="dsHasta">Hasta</label><input type="date" id="dsHasta" class="form-control form-control-sm"></div>
+    <div>
+      <label for="dsFuente">Fuente</label>
+      <select id="dsFuente" class="form-control form-control-sm">
+        <option value="">API Infobip (todos los SMS)</option>
+        <option value="smslog">SmsLog (solo enviados desde la app)</option>
+      </select>
+    </div>
+    <button type="button" class="btn btn-primary btn-sm" id="dsActualizar"><i class="fas fa-sync-alt"></i> Actualizar</button>
+    <span class="ds-estado" id="dsEstado">—</span>
+  </div>
+
+  <div id="dsContenido"><div class="ds-vacio"><i class="fas fa-spinner fa-spin"></i> Cargando…</div></div>
+</div>
+
+<template id="dsPlantilla">
+  <div class="ds-aviso" id="avisoVentanas" style="display:none;"></div>
+  <div class="ds-aviso" id="avisoSinDatos" style="display:none;"></div>
+
+  <div class="ds-hero">
+    <div class="ds-card">
+      <h3>Tasa de entrega</h3>
+      <div class="ds-sub">Entregados sobre los SMS enviados</div>
+      <div class="ds-hero-num" id="kTasa">—</div>
+      <div class="ds-hero-lbl" id="kTasaSub">—</div>
+    </div>
+    <div class="ds-card"><div class="ds-tiles" id="kTiles"></div></div>
+  </div>
+
+  <div class="ds-card" id="cardDias" style="display:none;">
+    <h3>Comparación por día</h3>
+    <div class="ds-scroll"><table class="ds-tabla" id="tDias"></table></div>
+  </div>
+
+  <div class="ds-grid2">
+    <div class="ds-card">
+      <h3>SMS por hora</h3>
+      <div class="ds-sub">Enviados cada hora (Colombia), por estado de entrega</div>
+      <div class="ds-leyenda" id="leyendaHoras"></div>
+      <div class="ds-chart"><canvas id="gHoras" aria-label="SMS por hora"></canvas></div>
+      <details class="ds-ver-tabla"><summary>Ver tabla</summary><div class="ds-scroll"><table class="ds-tabla" id="tHoras"></table></div></details>
+    </div>
+    <div class="ds-card" id="cardOperadores">
+      <h3>Operadores</h3>
+      <div class="ds-sub">Entrega, costo y tiempo de entrega (P50 / P95 en segundos) por operador</div>
+      <div class="ds-scroll"><table class="ds-tabla" id="tOperadores"></table></div>
+    </div>
+  </div>
+
+  <div class="ds-card">
+    <h3>Errores y acción sugerida</h3>
+    <div class="ds-scroll"><table class="ds-tabla" id="tErrores"></table></div>
+  </div>
+
+  <div class="ds-card">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+      <h3 style="margin:0;">Envíos (lotes)</h3>
+      <input type="search" class="form-control form-control-sm" style="max-width:260px;" id="dsBuscar" placeholder="Buscar bulk ID, campaña o texto">
+    </div>
+    <div class="ds-sub">Un lote = un bulk ID de Infobip. "Desde la app" = está en SmsLog (con campaña y usuario). Clic en "Ver" para sus SMS.</div>
+    <div class="ds-scroll"><table class="ds-tabla" id="tEnvios"></table></div>
+  </div>
+
+  <div class="ds-card" id="cardMensajes">
+    <h3>Mensajes</h3>
+    <div class="ds-sub">Cada SMS del periodo, con filtros. El CSV descarga todos los que cumplen los filtros.</div>
+    <div class="ds-filtros-det">
+      <select class="form-control form-control-sm" id="mLote"><option value="">Todos los lotes</option></select>
+      <select class="form-control form-control-sm" id="mEstado">
+        <option value="">Todos los estados</option>
+        <option value="DELIVERED">Entregado (DELIVERED)</option>
+        <option value="REJECTED">Rechazado (REJECTED)</option>
+        <option value="UNDELIVERABLE">No entregable (UNDELIVERABLE)</option>
+        <option value="EXPIRED">Vencido (EXPIRED)</option>
+        <option value="PENDING">Pendiente (PENDING)</option>
+      </select>
+      <select class="form-control form-control-sm" id="mOperador"><option value="">Todos los operadores</option></select>
+      <select class="form-control form-control-sm" id="mError"><option value="">Todos los errores</option></select>
+      <input type="search" class="form-control form-control-sm" id="mBuscar" placeholder="Teléfono o texto">
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="mFiltrar"><i class="fas fa-search"></i> Filtrar</button>
+      <a class="btn btn-success btn-sm" id="mCsv" href="#"><i class="fas fa-file-csv"></i> Descargar CSV</a>
+    </div>
+    <div class="ds-scroll"><table class="ds-tabla" id="tMensajes"></table></div>
+    <div class="ds-paginas">
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="mAnterior">‹ Anterior</button>
+      <span id="mPagina">—</span>
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="mSiguiente">Siguiente ›</button>
+    </div>
+  </div>
+</template>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% raw %}
+<script>
+(function () {
+  'use strict';
+
+  const $ = id => document.getElementById(id);
+  const css = getComputedStyle($('ds'));
+  const col = v => css.getPropertyValue(v).trim();
+  const C = { entregado: col('--e-entregado'), fallido: col('--e-fallido'), pendiente: col('--e-pendiente'),
+              sin_reporte: col('--e-sin-reporte'), superficie: col('--surface-1'), grid: col('--grid'),
+              eje: col('--axis'), muted: col('--ink-muted') };
+  const ESTADOS = [['entregado', 'entregados', 'Entregado'], ['fallido', 'fallidos', 'Fallido'],
+                   ['pendiente', 'pendientes', 'Pendiente'], ['sin_reporte', 'sin_reporte', 'Sin reporte']];
+  const CAT_ESTADO = { DELIVERED: 'entregado', REJECTED: 'fallido', UNDELIVERABLE: 'fallido', EXPIRED: 'fallido', PENDING: 'pendiente', ACCEPTED: 'pendiente' };
+  const nf = new Intl.NumberFormat('es-CO');
+  const num = v => nf.format(v || 0);
+  const pct = v => `${(v || 0).toLocaleString('es-CO', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`;
+  const pesos = v => `$${nf.format(Math.round(v || 0))}`;
+  const seg = v => v === null || v === undefined ? '—' : `${v} s`;
+  const pesos2 = v => `$${(v || 0).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const REFRESCO_MS = 60000;
+
+  let filtro = { periodo: 'hoy' };
+  let datos = null, grafico = null, paginaMsj = 1, totalMsj = 0, porPagina = 500;
+  let orden = { col: 'orden', desc: true };
+
+  function showToast(message, type) {
+    const toast = document.createElement('div');
+    toast.className = 'sms-toast ' + (type || 'info');
+    toast.innerHTML = '<span class="icon"><i class="fas fa-info-circle"></i></span><div class="content"></div>' +
+      '<button class="close-btn" onclick="this.parentElement.remove()">&times;</button>';
+    toast.querySelector('.content').textContent = message;
+    $('smsToastArea').appendChild(toast);
+    setTimeout(() => toast.remove(), 7000);
+  }
+  async function leerJson(resp) {
+    const texto = await resp.text();
+    try { return JSON.parse(texto); } catch (e) { throw new Error(`Error del servidor (HTTP ${resp.status}).`); }
+  }
+
+  function tabla(el, columnas, filas, opciones) {
+    opciones = opciones || {};
+    el.innerHTML = '';
+    const head = el.createTHead().insertRow();
+    columnas.forEach(([clave, titulo, , n]) => {
+      const th = document.createElement('th');
+      th.textContent = titulo + (opciones.ordenar && orden.col === clave ? (orden.desc ? ' ▼' : ' ▲') : '');
+      if (n) th.className = 'n';
+      if (opciones.ordenar && clave !== 'ver') { th.classList.add('ordenable'); th.addEventListener('click', () => opciones.ordenar(clave)); }
+      head.appendChild(th);
+    });
+    const body = el.createTBody();
+    if (!filas.length) {
+      const td = body.insertRow().insertCell();
+      td.colSpan = columnas.length; td.className = 'ds-vacio'; td.textContent = opciones.vacio || 'Sin datos en el periodo.';
+      return;
+    }
+    filas.forEach(f => {
+      const tr = body.insertRow();
+      columnas.forEach(([clave, , fmt, n]) => {
+        const td = tr.insertCell();
+        if (n) td.className = 'n';
+        if (clave === 'texto') td.className = 'texto';
+        const v = fmt ? fmt(f[clave], f) : (f[clave] ?? '—');
+        if (v instanceof Node) td.appendChild(v); else td.textContent = v;
+      });
+    });
+  }
+
+  function etiquetaEstado(clave, texto) {
+    const s = document.createElement('span');
+    s.innerHTML = `<span class="ds-dot" style="background:${C[clave]}"></span>`;
+    s.appendChild(document.createTextNode(texto));
+    return s;
+  }
+
+  // ---------- secciones ----------
+  function pintarKpis(t, infobip) {
+    $('kTasa').textContent = pct(t.tasa_entrega);
+    $('kTasaSub').textContent = `${num(t.entregados)} entregados de ${num(t.total)} SMS`;
+    const tiles = [
+      ['SMS enviados', num(t.total), infobip ? `${num(t.destinos_unicos)} destinos únicos` : `${num(t.envios)} envíos`],
+      ['Entregado', num(t.entregados), infobip ? `${pct(t.tasa_5s)} en menos de 5 s` : `${pct(t.tasa_entrega)} del total`, 'entregado'],
+      ['Fallido', num(t.fallidos), infobip ? `${num(t.rechazados)} rechazados · ${num(t.no_entregados)} no entregados` : `${pct(t.tasa_fallo)} del total`, 'fallido'],
+      ['Pendiente', num(t.pendientes), 'Todavía sin estado final', 'pendiente'],
+    ];
+    if (infobip) {
+      tiles.push(['Costo total', pesos(t.costo), `${pesos2(t.costo_por_entrega)} por SMS entregado`]);
+      tiles.push(['Lotes', num(t.envios), `${num(t.envios - t.no_registrados)} desde la app`]);
+    } else {
+      tiles.push(['Sin reporte', num(t.sin_reporte), 'Sin estado de Infobip', 'sin_reporte']);
+    }
+    const cont = $('kTiles');
+    cont.innerHTML = '';
+    tiles.forEach(([l, v, s, clave]) => {
+      const div = document.createElement('div');
+      div.className = 'ds-tile';
+      const lbl = document.createElement('div'); lbl.className = 'l';
+      lbl.appendChild(clave ? etiquetaEstado(clave, l) : document.createTextNode(l));
+      div.appendChild(lbl);
+      div.appendChild(Object.assign(document.createElement('div'), { className: 'v', textContent: v }));
+      div.appendChild(Object.assign(document.createElement('div'), { className: 's', textContent: s }));
+      cont.appendChild(div);
+    });
+  }
+
+  function pintarGrafico(horas) {
+    if (grafico) grafico.destroy();
+    $('leyendaHoras').innerHTML = '';
+    ESTADOS.forEach(([clave, , texto]) => $('leyendaHoras').appendChild(etiquetaEstado(clave, texto)));
+    grafico = new Chart($('gHoras'), {
+      type: 'bar',
+      data: { labels: horas.map(h => h.hora.slice(5)), datasets: ESTADOS.map(([clave, campo, texto], i) => ({
+        label: texto, data: horas.map(h => h[campo]), backgroundColor: C[clave],
+        borderColor: C.superficie, borderWidth: { top: 2, bottom: 0, left: 0, right: 0 }, borderSkipped: false,
+        borderRadius: i === ESTADOS.length - 1 ? { topLeft: 4, topRight: 4 } : 0, maxBarThickness: 24,
+      })) },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { display: false }, tooltip: { backgroundColor: '#0b0b0b', padding: 10, usePointStyle: true,
+          callbacks: { label: c => ` ${c.dataset.label}: ${num(c.raw)}`, footer: items => `Total: ${num(horas[items[0].dataIndex].total)} SMS` } } },
+        scales: {
+          x: { stacked: true, grid: { display: false }, border: { color: C.eje }, ticks: { color: C.muted, maxRotation: 0, autoSkip: true } },
+          y: { stacked: true, beginAtZero: true, grid: { color: C.grid }, border: { display: false }, ticks: { color: C.muted, callback: v => nf.format(v) } },
+        },
+      },
+    });
+  }
+
+  const COLS_ESTADO = [['total', 'SMS', num, true], ['entregados', 'Entregados', num, true], ['fallidos', 'Fallidos', num, true],
+                       ['pendientes', 'Pendientes', num, true], ['tasa_entrega', 'Tasa entrega', pct, true]];
+
+  function filasEnvios() {
+    const q = ($('dsBuscar').value || '').trim().toLowerCase();
+    return datos.envios.filter(e => !q || `${e.bulk_id} ${e.campana || ''} ${e.usuario || ''} ${e.texto || ''}`.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const x = a[orden.col] ?? '', y = b[orden.col] ?? '';
+        const r = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), 'es');
+        return orden.desc ? -r : r;
+      });
+  }
+  function botonVer(_, e) {
+    const b = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-accion' });
+    b.innerHTML = '<i class="fas fa-search"></i> Ver';
+    b.addEventListener('click', () => { $('mLote').value = e.bulk_id; paginaMsj = 1; cargarMensajes(); $('cardMensajes').scrollIntoView({ behavior: 'smooth' }); });
+    return b;
+  }
+  function pintarEnvios() {
+    const infobip = datos.fuente === 'infobip';
+    const cols = [['orden', 'Primer SMS', (v, f) => f.fecha_envio], ['bulk_id', 'Bulk ID']];
+    if (infobip) cols.push(['en_smslog', 'Desde la app', (v, f) => v ? `Sí · ${f.campana || 'sin campaña'}` : 'No'],
+                           ['sender', 'Remitente'], ['operador_principal', 'Operador principal']);
+    else cols.push(['campana', 'Campaña', v => v || '—'], ['usuario', 'Usuario', v => v || '—']);
+    cols.push(...COLS_ESTADO);
+    if (infobip) cols.push(['costo', 'Costo', pesos, true], ['texto', 'Texto', v => v || ''], ['ver', '', botonVer]);
+    tabla($('tEnvios'), cols, filasEnvios(), {
+      ordenar: c => { orden = { col: c, desc: orden.col === c ? !orden.desc : true }; pintarEnvios(); }, vacio: 'No hay envíos en el periodo.',
+    });
+  }
+
+  // ---------- mensajes (servidor, con filtros) ----------
+  function paramsBase() {
+    const p = new URLSearchParams();
+    if (filtro.periodo) p.set('periodo', filtro.periodo);
+    else { p.set('desde', $('dsDesde').value); p.set('hasta', $('dsHasta').value || $('dsDesde').value); }
+    return p;
+  }
+  function paramsMensajes() {
+    const p = paramsBase();
+    [['bulk_id', 'mLote'], ['estado', 'mEstado'], ['operador', 'mOperador'], ['error', 'mError'], ['buscar', 'mBuscar']]
+      .forEach(([k, id]) => { if ($(id).value) p.set(k, $(id).value); });
+    return p;
+  }
+  function llenarSelect(id, valores, vacio) {
+    const sel = $(id), actual = sel.value;
+    sel.innerHTML = '';
+    sel.add(new Option(vacio, ''));
+    valores.forEach(([v, t]) => sel.add(new Option(t, v)));
+    if ([...sel.options].some(o => o.value === actual)) sel.value = actual;
+  }
+  async function cargarMensajes() {
+    $('mCsv').href = '/api/dashboards/exportar?' + paramsMensajes();
+    const p = paramsMensajes(); p.set('pagina', paginaMsj);
+    try {
+      const d = await leerJson(await fetch('/api/dashboards/mensajes?' + p));
+      if (!d.success) throw new Error(d.message || 'No se pudieron leer los mensajes');
+      totalMsj = d.total; porPagina = d.por_pagina;
+      tabla($('tMensajes'), [['enviado', 'Enviado'], ['bulk_id', 'Bulk ID'], ['destino', 'Destino'], ['operador', 'Operador'],
+        ['estado', 'Estado', v => etiquetaEstado(CAT_ESTADO[v] || 'sin_reporte', v || '—')], ['demora_seg', 'Demora', seg, true],
+        ['error', 'Error', v => v && v !== 'NO_ERROR' ? v : ''], ['accion', 'Acción sugerida'], ['precio', 'Precio', v => v, true], ['texto', 'Texto']],
+        d.filas, { vacio: 'Sin SMS con esos filtros.' });
+      const paginas = Math.max(1, Math.ceil(totalMsj / porPagina));
+      $('mPagina').textContent = `${num(totalMsj)} SMS · página ${paginaMsj} de ${paginas}`;
+      $('mAnterior').disabled = paginaMsj <= 1;
+      $('mSiguiente').disabled = paginaMsj >= paginas;
+    } catch (err) {
+      showToast(err.message, 'danger');
+    }
+  }
+
+  function pintar(d) {
+    datos = d;
+    const infobip = d.fuente === 'infobip';
+    if (!$('kTasa')) {
+      $('dsContenido').innerHTML = '';
+      $('dsContenido').appendChild($('dsPlantilla').content.cloneNode(true));
+      $('dsBuscar').addEventListener('input', pintarEnvios);
+      $('mFiltrar').addEventListener('click', () => { paginaMsj = 1; cargarMensajes(); });
+      ['mLote', 'mEstado', 'mOperador', 'mError'].forEach(id => $(id).addEventListener('change', () => { paginaMsj = 1; cargarMensajes(); }));
+      $('mBuscar').addEventListener('keydown', e => { if (e.key === 'Enter') { paginaMsj = 1; cargarMensajes(); } });
+      $('mAnterior').addEventListener('click', () => { paginaMsj--; cargarMensajes(); });
+      $('mSiguiente').addEventListener('click', () => { paginaMsj++; cargarMensajes(); });
+    }
+    $('avisoSinDatos').style.display = d.total.total ? 'none' : '';
+    $('avisoSinDatos').textContent = `No hay SMS entre ${d.desde} y ${d.hasta}.` + (d.ultimo_envio ? ` El último registrado es del ${d.ultimo_envio}.` : '');
+    const fallas = d.ventanas_con_error || [];
+    $('avisoVentanas').style.display = fallas.length ? '' : 'none';
+    $('avisoVentanas').textContent = `Infobip no respondió para ${fallas.length} tramo(s) de 30 minutos (${fallas.slice(0, 6).join(', ')}${fallas.length > 6 ? '…' : ''}): ` +
+      'los totales pueden estar incompletos. Se vuelven a pedir en la próxima actualización.';
+    pintarKpis(d.total, infobip);
+    pintarGrafico(d.horas);
+    tabla($('tHoras'), [['hora', 'Hora'], ...COLS_ESTADO], d.horas);
+
+    const dias = d.dias || [];
+    $('cardDias').style.display = dias.length > 1 ? '' : 'none';
+    tabla($('tDias'), [['dia', 'Día'], ...COLS_ESTADO, ['rechazados', 'Rechazados', num, true], ['costo', 'Costo', pesos, true],
+                       ['costo_por_entrega', '$ por entrega', pesos2, true]], dias);
+
+    $('cardOperadores').style.display = infobip ? '' : 'none';
+    tabla($('tOperadores'), [['operador', 'Operador'], ['total', 'SMS', num, true], ['tasa_entrega', 'Entrega', pct, true],
+      ['tasa_fallo', 'Fallo', pct, true], ['costo', 'Costo', pesos, true], ['costo_por_entrega', '$ por entrega', pesos2, true],
+      ['p50_seg', 'P50', seg, true], ['p95_seg', 'P95', seg, true], ['mas_5min', '> 5 min', num, true]], d.operadores || []);
+    tabla($('tErrores'), infobip
+      ? [['error', 'Error'], ['descripcion', 'Descripción'], ['mensajes', 'SMS', num, true], ['accion', 'Acción sugerida']]
+      : [['error', 'Error'], ['mensajes', 'SMS', num, true]], d.errores, { vacio: 'Sin SMS fallidos.' });
+    pintarEnvios();
+
+    $('cardMensajes').style.display = infobip ? '' : 'none';
+    if (infobip) {
+      llenarSelect('mLote', d.envios.map(e => [e.bulk_id, `${e.bulk_id} (${num(e.total)})`]), 'Todos los lotes');
+      llenarSelect('mOperador', (d.operadores || []).map(o => [o.operador, `${o.operador} (${num(o.total)})`]), 'Todos los operadores');
+      llenarSelect('mError', (d.errores || []).map(e => [e.error, `${e.error} (${num(e.mensajes)})`]), 'Todos los errores');
+      cargarMensajes();
+    }
+  }
+
+  function params() {
+    const p = paramsBase();
+    if ($('dsFuente').value) {
+      p.set('fuente', $('dsFuente').value);
+      if (filtro.periodo) { p.delete('periodo'); p.set('horas', { hoy: 24, ayer: 48, '48h': 48, '7d': 168 }[filtro.periodo]); }
+    }
+    return p;
+  }
+
+  async function cargar(silencioso) {
+    if (!silencioso) $('dsEstado').textContent = 'Consultando…';
+    $('dsActualizar').disabled = true;
+    try {
+      const d = await leerJson(await fetch('/api/dashboards?' + params()));
+      if (!d.success) throw new Error(d.message || 'Error leyendo el dashboard');
+      pintar(d);
+      const fuente = d.fuente === 'infobip' ? 'Infobip (BigQuery)' : 'SmsLog';
+      const sinc = d.ultima_sincronizacion ? ` · copiado de Infobip a las ${d.ultima_sincronizacion.slice(11)}` : '';
+      $('dsEstado').textContent = `Fuente: ${fuente} · ${d.desde} a ${d.hasta}${sinc} · actualizado ${d.generado.slice(11, 16)} · se actualiza cada minuto`;
+    } catch (err) {
+      $('dsEstado').textContent = '';
+      if (!silencioso || !datos) {
+        $('dsContenido').innerHTML = '';
+        $('dsContenido').appendChild(Object.assign(document.createElement('div'), { className: 'ds-aviso error', textContent: '❌ ' + err.message }));
+        datos = null;
+      }
+    } finally {
+      $('dsActualizar').disabled = false;
+    }
+  }
+
+  document.querySelectorAll('#dsPresets .btn').forEach(b => b.addEventListener('click', () => {
+    filtro = { periodo: b.dataset.periodo };
+    $('dsDesde').value = $('dsHasta').value = '';
+    document.querySelectorAll('#dsPresets .btn').forEach(x => x.classList.toggle('activo', x === b));
+    cargar();
+  }));
+  ['dsDesde', 'dsHasta'].forEach(id => $(id).addEventListener('change', () => {
+    if (!$('dsDesde').value) return;
+    filtro = { periodo: null };
+    document.querySelectorAll('#dsPresets .btn').forEach(x => x.classList.remove('activo'));
+    cargar();
+  }));
+  $('dsFuente').addEventListener('change', () => cargar());
+  $('dsActualizar').addEventListener('click', () => cargar());
+  cargar();
+  // Se actualiza solo cada minuto, sin perder filtros ni la página de mensajes.
+  setInterval(() => { if (!document.hidden) cargar(true); }, REFRESCO_MS);
+})();
+</script>
+{% endraw %}
+{% endblock %}

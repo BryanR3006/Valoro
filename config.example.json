@@ -1,0 +1,19 @@
+{
+  "general_parameters": {
+    "console_message_interval_seconds": 60,
+    "log_retention_hours": 72
+  },
+  "email": {
+    "api_key": "",
+    "from_email": "",
+    "from_alias": ""
+  },
+  "infobip": {
+    "api_key": "",
+    "base_url": "",
+    "sender_id": "",
+    "batch_size": 500,
+    "max_workers": 3,
+    "senuelos": []
+  }
+}

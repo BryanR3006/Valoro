@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ app_nombre }}{% endblock %} | {{ app_nombre }}</title>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.2/css/all.min.css">
+    
+    <!-- Fuente Manrope -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+
+    <!-- Valoro Design System -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/valoro.css') }}">
+    
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+
+<div class="wrapper">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar" id="sidebar">
+        <a href="/" class="sidebar-logo">
+            {# Logo: static/img/logo-valoro.png. Si el archivo no está, se ve el nombre. #}
+            <img src="{{ url_for('static', filename='img/logo-valoro.png') }}" alt="{{ app_nombre }}" class="logo-img"
+                 onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+            <div class="logo-text" style="display:none;">{{ app_nombre }}</div>
+        </a>
+        
+        {# Menú: cada grupo se despliega al hacer clic en su nombre. El grupo de la
+           página actual arranca abierto. "activo" decide qué opción se resalta y
+           también arma la ruta (Grupo > Página) de la barra superior. #}
+        {% set ep = current_endpoint or '' %}
+        {% set menu = [
+            {'id': 'sms', 'titulo': 'SMS', 'icono': 'fa-sms', 'items': [
+                {'url': '/config-sms', 'texto': 'Enviar SMS', 'icono': 'fa-paper-plane', 'activo': ep == 'config_sms'},
+                {'url': '/api/sms/ver_programaciones', 'texto': 'Programaciones SMS', 'icono': 'fa-calendar-alt', 'activo': ep == 'sms_programaciones_pagina'},
+                {'url': '/config-mensajes', 'texto': 'Plantillas SMS', 'icono': 'fa-file-alt', 'activo': ep == 'config_mensajes'},
+                {'url': '/dashboards', 'texto': 'Dashboard SMS', 'icono': 'fa-chart-pie', 'activo': ep == 'dashboards_page'},
+            ]},
+            {'id': 'email', 'titulo': 'Email', 'icono': 'fa-envelope', 'items': [
+                {'url': '/config-email', 'texto': 'Enviar Email', 'icono': 'fa-paper-plane', 'activo': ep == 'config_email'},
+                {'url': '/email/plantillas', 'texto': 'Plantillas email', 'icono': 'fa-file-alt', 'activo': ep == 'email_plantillas_pagina'},
+            ]},
+            {'id': 'config', 'titulo': 'Configuración', 'icono': 'fa-cog', 'items': [
+                {'url': '/config-general', 'texto': 'Parámetros generales', 'icono': 'fa-sliders-h', 'activo': ep == 'config_general'},
+            ]},
+        ] %}
+        {% set ns = namespace(grupo=None, item=None) %}
+        {% for g in menu %}{% for it in g['items'] if it['activo'] %}{% set ns.grupo = g %}{% set ns.item = it %}{% endfor %}{% endfor %}
+
+        <nav class="sidebar-nav">
+            <a href="/" class="sidebar-link {% if ep == 'index' %}active{% endif %}">
+                <i class="fas fa-home nav-icon"></i> Inicio
+            </a>
+            {% for g in menu %}
+            {% set abierto = ns.grupo and ns.grupo['id'] == g['id'] %}
+            <div class="sidebar-group {% if abierto %}open{% endif %}" data-grupo="{{ g['id'] }}" {% if abierto %}data-actual="1"{% endif %}>
+                <button type="button" class="sidebar-group-toggle" aria-expanded="{{ 'true' if abierto else 'false' }}">
+                    <i class="fas {{ g['icono'] }} nav-icon"></i>
+                    <span>{{ g['titulo'] }}</span>
+                    <i class="fas fa-chevron-down sidebar-group-chevron"></i>
+                </button>
+                <div class="sidebar-group-items">
+                    {% for it in g['items'] %}
+                    <a href="{{ it['url'] }}" class="sidebar-link {% if it['activo'] %}active{% endif %}">
+                        <i class="fas {{ it['icono'] }} nav-icon"></i> {{ it['texto'] }}
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        </nav>
+        
+        
+    </aside>
+
+    <!-- CONTENT WRAPPER -->
+    <div class="content-wrapper">
+        
+        <!-- NAVBAR -->
+        <nav class="navbar-top">
+            <div class="nav-left">
+                <button class="menu-toggle" id="menuToggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <span class="nav-title">{% block navbar_title %}
+                    {%- if ns.item -%}
+                    <span class="nav-ruta">{{ ns.grupo['titulo'] }}</span>
+                    <i class="fas fa-chevron-right nav-ruta-sep"></i>
+                    {{ ns.item['texto'] }}
+                    {%- elif ep == 'index' -%}Inicio{%- else -%}{{ app_nombre }}{%- endif -%}
+                {% endblock %}</span>
+            </div>
+        </nav>
+
+        <!-- CONTENT -->
+        <div class="content">
+            <div class="content-header">
+                {% if ns.item or ep == 'index' %}
+                <div class="page-icon"><i class="fas {{ ns.item['icono'] if ns.item else 'fa-home' }}"></i></div>
+                {% endif %}
+                <div class="page-head-text">
+                    <div class="page-head">{% block page_title %}<h1>Panel</h1>{% endblock %}</div>
+                    <div class="page-sub">{% block page_subtitle %}{% endblock %}</div>
+                </div>
+            </div>
+            
+            {% block content %}{% endblock %}
+        </div>
+        
+    </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(function() {
+    const sidebar = document.getElementById('sidebar');
+    const toggle = document.getElementById('menuToggle');
+    const contentWrapper = document.querySelector('.content-wrapper');
+    const mainFooter = document.querySelector('.main-footer');
+    
+    // Crear overlay para móvil
+    const overlay = document.createElement('div');
+    overlay.className = 'sidebar-overlay';
+    overlay.id = 'sidebarOverlay';
+    document.body.appendChild(overlay);
+    
+    function isMobile() {
+        return window.innerWidth <= 768;
+    }
+    
+    function showSidebar() {
+        if (isMobile()) {
+            sidebar.classList.add('open');
+            sidebar.classList.remove('hidden');
+            overlay.classList.add('active');
+        } else {
+            sidebar.classList.remove('hidden');
+            contentWrapper.classList.remove('full');
+            if (mainFooter) mainFooter.classList.remove('full');
+        }
+    }
+    
+    function hideSidebar() {
+        if (isMobile()) {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('active');
+        } else {
+            sidebar.classList.add('hidden');
+            contentWrapper.classList.add('full');
+            if (mainFooter) mainFooter.classList.add('full');
+        }
+    }
+    
+    function toggleSidebar() {
+        if (isMobile()) {
+            if (sidebar.classList.contains('open')) {
+                hideSidebar();
+            } else {
+                showSidebar();
+            }
+        } else {
+            if (sidebar.classList.contains('hidden')) {
+                showSidebar();
+            } else {
+                hideSidebar();
+            }
+        }
+    }
+    
+    toggle.addEventListener('click', function(e) {
+        e.stopPropagation();
+        toggleSidebar();
+    });
+    
+    overlay.addEventListener('click', function() {
+        sidebar.classList.remove('open');
+        overlay.classList.remove('active');
+    });
+    
+    const CLAVE_GRUPOS = 'menu_grupos_abiertos';
+    let abiertos = {};
+    try { abiertos = JSON.parse(localStorage.getItem(CLAVE_GRUPOS)) || {}; } catch (e) { abiertos = {}; }
+    document.querySelectorAll('.sidebar-group').forEach(function(grupo) {
+        const id = grupo.dataset.grupo;
+        const boton = grupo.querySelector('.sidebar-group-toggle');
+        // El grupo de la página actual siempre arranca abierto.
+        if (!grupo.dataset.actual && abiertos[id]) {
+            grupo.classList.add('open');
+            boton.setAttribute('aria-expanded', 'true');
+        }
+        boton.addEventListener('click', function() {
+            const abrir = !grupo.classList.contains('open');
+            grupo.classList.toggle('open', abrir);
+            boton.setAttribute('aria-expanded', abrir ? 'true' : 'false');
+            abiertos[id] = abrir;
+            try { localStorage.setItem(CLAVE_GRUPOS, JSON.stringify(abiertos)); } catch (e) {}
+        });
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('active');
+        }
+    });
+})();
+</script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

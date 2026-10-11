@@ -1,0 +1,9 @@
+Flask>=2.3,<3.0
+Flask-SQLAlchemy>=3.0
+APScheduler>=3.10
+requests>=2.31
+openpyxl>=3.0
+google-cloud-bigquery>=3.0
+db-dtypes>=1.0
+pandas>=2.0
+pytz

@@ -1,0 +1,466 @@
+import json
+import logging
+from logging.handlers import RotatingFileHandler
+import shutil
+import threading
+from collections import deque
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import pytz
+from flask import Flask
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+
+from database import db, init_db  # noqa: F401  (db se importa desde backend en app.py)
+from general_params import (
+    get_console_message_interval_seconds,
+    get_log_retention_hours,
+)
+
+# Nombre de la aplicación: se muestra en la interfaz (layout) desde aquí.
+APP_NOMBRE = "Valoro"
+
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_FOLDER = BASE_DIR / "uploads"
+DOWNLOAD_FOLDER = BASE_DIR / "downloads"
+LOG_FILE = BASE_DIR / "execution_log.txt"
+CONFIG_FILE = BASE_DIR / "config.json"
+CONSOLE_MESSAGE_JOB_ID = "console_message_heartbeat"
+LOG_MANTENIMIENTO_JOB_ID = "mantenimiento_logs"
+
+# Logs por área: errores y eventos de SMS y de email, cada uno en su archivo.
+LOGS_DIR = BASE_DIR / "logs"
+SMS_LOG_FILE = LOGS_DIR / "sms.log"
+EMAIL_LOG_FILE = LOGS_DIR / "email.log"
+LOGGERS_SMS = ("sms", "services.sms_service", "services.sms_excel", "infobip_sync", "infobip_logs")
+LOGGERS_EMAIL = ("email", "services.email_service", "services.email_client")
+
+CONFIG = {}
+
+def load_config():
+    global CONFIG
+    try:
+        with CONFIG_FILE.open("r", encoding="utf-8") as f:
+            CONFIG = json.load(f)
+            logger.debug(f"Configuración cargada desde {CONFIG_FILE}")
+    except FileNotFoundError:
+        CONFIG = {}
+        logger.warning(f"No se encontró {CONFIG_FILE}. Usando configuración vacía.")
+    except Exception as e:
+        CONFIG = {}
+        logger.error(f"Error cargando {CONFIG_FILE}: {e}")
+    return CONFIG
+
+
+
+
+# Logging: tablero (memoria) = actividad en vivo; archivo = solo ejecución de tareas.
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+LOG_MAX_LINES = 3000
+# app_log.txt: todo lo que sale en consola; 5 MB por archivo, 10 respaldos
+# (app_log.txt.1 ... .10), ~50 MB en total.
+APP_LOG_FILE = BASE_DIR / "app_log.txt"
+APP_LOG_MAX_BYTES = 5 * 1024 * 1024
+APP_LOG_BACKUPS = 10
+ACTIVITY_LOG_MAX_LINES = 300
+_log_io_lock = threading.Lock()
+_activity_log: deque[str] = deque(maxlen=ACTIVITY_LOG_MAX_LINES)
+_activity_lock = threading.Lock()
+
+
+# ============================================================
+# NUEVO: ActivityLogHandler para capturar logs automáticamente
+# ============================================================
+class ActivityLogHandler(logging.Handler):
+    """Envía los logs al panel del dashboard mediante _activity_log."""
+
+    def emit(self, record):
+        try:
+            message = self.format(record)
+
+            with _activity_lock:
+                _activity_log.append(message)
+
+        except Exception:
+            self.handleError(record)
+
+
+def _configure_logging() -> None:
+    formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT)
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    # -----------------------------
+    # Consola
+    # -----------------------------
+    if not any(
+        isinstance(h, logging.StreamHandler)
+        and not isinstance(h, logging.FileHandler)
+        for h in root.handlers
+    ):
+        console = logging.StreamHandler()
+        console.setFormatter(formatter)
+        root.addHandler(console)
+
+    # -----------------------------
+    # Dashboard (NUEVO)
+    # -----------------------------
+    if not any(
+        isinstance(h, ActivityLogHandler)
+        for h in root.handlers
+    ):
+        activity_handler = ActivityLogHandler()
+        activity_handler.setFormatter(formatter)
+        root.addHandler(activity_handler)
+
+    # -----------------------------
+    # Archivo con todo lo de la consola (programaciones, envíos, errores).
+    # El tablero solo guarda en memoria las últimas líneas (~1 hora) y se
+    # borra al reiniciar; este archivo queda como historial. Rota por tamaño.
+    # -----------------------------
+    if not any(
+        isinstance(h, RotatingFileHandler)
+        and Path(h.baseFilename).resolve() == APP_LOG_FILE.resolve()
+        for h in root.handlers
+    ):
+        app_file_handler = RotatingFileHandler(
+            str(APP_LOG_FILE),
+            maxBytes=APP_LOG_MAX_BYTES,
+            backupCount=APP_LOG_BACKUPS,
+            encoding="utf-8",
+        )
+        app_file_handler.setFormatter(formatter)
+        root.addHandler(app_file_handler)
+
+    # ==================================================
+    # LOGGER EXECUTION
+    # ==================================================
+    execution_logger = logging.getLogger("execution")
+    execution_logger.setLevel(logging.INFO)
+    execution_logger.propagate = False
+
+    if not any(
+        isinstance(h, logging.FileHandler)
+        for h in execution_logger.handlers
+    ):
+        file_handler = logging.FileHandler(
+            str(LOG_FILE),
+            encoding="utf-8"
+        )
+
+        file_handler.setFormatter(formatter)
+        execution_logger.addHandler(file_handler)
+
+    # ==================================================
+    # LOGGERS RUIDOSOS
+    # ==================================================
+    for noisy in (
+        "apscheduler",
+        "apscheduler.scheduler",
+        "werkzeug"
+    ):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+_configure_logging()
+logger = logging.getLogger(__name__)
+execution_logger = logging.getLogger("execution")
+
+
+def _format_log_line(level: str, message: str) -> str:
+    ts = datetime.now().strftime(LOG_DATEFMT)
+    return f"{ts} - {level.upper()} - {message}"
+
+
+def log_activity(message: str, level: str = "INFO") -> None:
+    """Visible en el tablero (/api/recent_logs); no escribe en disco."""
+    line = _format_log_line(level, message)
+    with _activity_lock:
+        _activity_log.append(line)
+
+
+def log_to_file(message: str, level: str = "INFO") -> None:
+    """Persiste en execution_log.txt y refleja en el tablero web."""
+    log_fn = getattr(execution_logger, level.lower(), execution_logger.info)
+    log_fn(message)
+    log_activity(message, level)
+
+
+def log_task(message: str, level: str = "INFO") -> None:
+    """Ejecución real de tarea: archivo + tablero (una línea por mensaje)."""
+    log_to_file(message, level)
+
+
+def log_gui_action(action: str, **fields) -> None:
+    """Acción desde la interfaz: solo tablero (no archivo)."""
+    if fields:
+        detail = ", ".join(f"{key}={value}" for key, value in fields.items())
+        log_activity(f"[GUI] {action} — {detail}")
+    else:
+        log_activity(f"[GUI] {action}")
+
+
+def _execution_log_file_handlers():
+    """Handlers que escriben en execution_log.txt."""
+    log_path = LOG_FILE.resolve()
+    for handler in execution_logger.handlers:
+        if isinstance(handler, logging.FileHandler):
+            try:
+                if Path(handler.baseFilename).resolve() == log_path:
+                    yield handler
+            except (TypeError, ValueError, OSError):
+                continue
+
+
+def _close_execution_log_handlers():
+    for handler in list(_execution_log_file_handlers()):
+        handler.close()
+        execution_logger.removeHandler(handler)
+
+
+def _attach_execution_log_handler():
+    if any(True for _ in _execution_log_file_handlers()):
+        return
+    handler = logging.FileHandler(str(LOG_FILE), encoding="utf-8")
+    handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT))
+    execution_logger.addHandler(handler)
+
+
+def _archivo_de_log_por_area(ruta: Path, nombres) -> None:
+    """Agrega un archivo de log (rota a los 5 MB, 5 respaldos) a los loggers del área."""
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    for nombre in nombres:
+        area_logger = logging.getLogger(nombre)
+        area_logger.setLevel(logging.INFO)
+        if any(isinstance(h, RotatingFileHandler) and Path(h.baseFilename).resolve() == ruta.resolve()
+               for h in area_logger.handlers):
+            continue
+        handler = RotatingFileHandler(str(ruta), maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
+        handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT))
+        area_logger.addHandler(handler)
+
+
+_archivo_de_log_por_area(SMS_LOG_FILE, LOGGERS_SMS)
+_archivo_de_log_por_area(EMAIL_LOG_FILE, LOGGERS_EMAIL)
+logger_sms = logging.getLogger("sms")
+logger_email = logging.getLogger("email")
+
+
+app = Flask(__name__)
+app.config["JSON_SORT_KEYS"] = False
+app.config["SECRET_KEY"] = "change-this-secret-key"
+app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
+app.config["DOWNLOAD_FOLDER"] = str(DOWNLOAD_FOLDER)
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{BASE_DIR / 'app.db'}"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+
+@app.context_processor
+def _nombre_app():
+    """APP_NOMBRE disponible en todas las plantillas."""
+    return {"app_nombre": APP_NOMBRE}
+
+
+init_db(app)
+COLOMBIA_TZ = pytz.timezone("America/Bogota")
+
+scheduler = BackgroundScheduler(
+    timezone=COLOMBIA_TZ
+)
+scheduler.start()
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+load_config()
+
+
+def reschedule_console_message_job(seconds: int | None = None) -> int:
+    """Reprograma el mensaje en consola."""
+    interval = (
+        int(seconds)
+        if seconds is not None
+        else get_console_message_interval_seconds()
+    )
+    scheduler.reschedule_job(
+        CONSOLE_MESSAGE_JOB_ID,
+        trigger=IntervalTrigger(seconds=interval),
+    )
+    logger.info(f"Mensaje consola reprogramado: cada {interval} segundos")
+    return interval
+
+
+LOG_BACKUP_GLOB = "execution_log_backup_*.txt"
+
+
+def cleanup_old_log_files() -> list[str]:
+    """Elimina archivos de log rotados más antiguos que log_retention_hours."""
+    retention_hours = get_log_retention_hours()
+    cutoff_ts = datetime.now().timestamp() - (retention_hours * 3600)
+    deleted: list[str] = []
+
+    for path in BASE_DIR.glob(LOG_BACKUP_GLOB):
+        try:
+            if path.resolve() == LOG_FILE.resolve():
+                continue
+            if path.stat().st_mtime < cutoff_ts:
+                path.unlink()
+                deleted.append(path.name)
+        except OSError as e:
+            logger.warning(f"No se pudo eliminar log antiguo {path.name}: {e}")
+
+    if deleted:
+        log_activity(
+            f"Logs de respaldo eliminados (retención {retention_hours} h): {', '.join(deleted)}"
+        )
+    return deleted
+
+
+def read_recent_log_lines(limit: int = 200) -> list[str]:
+    """Últimas líneas de actividad para el tablero."""
+    with _activity_lock:
+        if not _activity_log:
+            return []
+        return list(_activity_log)[-limit:]
+
+
+def rotate_log_if_needed():
+    """Rota execution_log.txt al superar LOG_MAX_LINES."""
+    with _log_io_lock:
+        if not LOG_FILE.exists():
+            return
+        try:
+            with LOG_FILE.open("r", encoding="utf-8", errors="replace") as f:
+                line_count = sum(1 for _ in f)
+        except OSError as e:
+            logger.warning(f"No se pudo leer el log para rotación: {e}")
+            return
+
+        if line_count < LOG_MAX_LINES:
+            return
+
+        backup_file = BASE_DIR / (
+            f"execution_log_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        )
+        _close_execution_log_handlers()
+        try:
+            shutil.copy2(LOG_FILE, backup_file)
+            LOG_FILE.unlink(missing_ok=True)
+            _attach_execution_log_handler()
+            log_to_file(f"Archivo de log rotado: {backup_file.name}")
+            cleanup_old_log_files()
+        except OSError as e:
+            _attach_execution_log_handler()
+            logger.error(f"No se pudo rotar el log: {e}")
+
+
+def console_message_heartbeat():
+    """Mensaje fijo en consola cada N segundos."""
+    print(
+        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Revisando programaciones de SMS y email...",
+        flush=True,
+    )
+
+
+def mantenimiento_logs():
+    """Rota execution_log.txt y borra los respaldos viejos (cada 5 minutos)."""
+    try:
+        rotate_log_if_needed()
+        cleanup_old_log_files()
+    except Exception as e:
+        logger.error(f"Error en el mantenimiento de logs: {e}")
+
+
+# ==================================================
+# 🔄 POLLING DE ESTADOS SMS (CORREGIDO)
+# ==================================================
+
+def polling_estados_sms():
+    """
+    Consulta el estado de los SMS pendientes y actualiza BigQuery.
+    Se ejecuta cada 10 minutos.
+    """
+    try:
+        logger.info("="*60)
+        logger.info("🔄 POLLING DE ESTADOS SMS")
+        logger.info("="*60)
+        
+        # Obtener configuración de Infobip
+        config = load_config()
+        infobip_config = config.get("infobip", {})
+        api_key = infobip_config.get("api_key", "").strip()
+        base_url = infobip_config.get("base_url", "").strip()
+        
+        if not api_key or not base_url:
+            logger_sms.error("❌ Polling de estados SMS: falta api_key o base_url en la sección infobip de config.json")
+            return
+        
+        # Obtener cliente de BigQuery
+        from conexion_bigquery import get_bigquery_client
+        client = get_bigquery_client()
+        
+        if not client:
+            logger_sms.error("❌ Polling de estados SMS: no se pudo conectar a BigQuery")
+            return
+        
+        # 🔥 Importar la función CORRECTA desde sms_service
+        from services.sms_service import actualizar_estados_pendientes
+        
+        # Ejecutar polling
+        resultado = actualizar_estados_pendientes(
+            api_key=api_key,
+            base_url=base_url,
+            client=client
+        )
+        
+        logger.info(f"📊 Resultado del polling: {resultado}")
+        logger.info("="*60)
+        
+    except Exception as e:
+        logger_sms.exception(f"❌ Error en el polling de estados SMS: {e}")
+
+
+# ==================================================
+#  POLLING DE ESTADOS SMS - CADA 10 MINUTOS
+# ==================================================
+
+# En una copia de prueba (APP_COPIA_PRUEBA=1) no se programa: el polling
+# actualiza en BigQuery los estados de los SMS de producción.
+from modo_prueba import es_copia_prueba
+
+if es_copia_prueba():
+    logger.warning("🧪 APP_COPIA_PRUEBA=1: no se programa el polling de estados SMS.")
+else:
+    scheduler.add_job(
+        polling_estados_sms,
+        trigger=IntervalTrigger(minutes=10),
+        id="sms_polling_estados",
+        replace_existing=True,
+        next_run_time=datetime.now() + timedelta(seconds=60)  # Primera en 60s
+    )
+    logger.info("✅ Polling de estados SMS programado cada 10 minutos")
+
+
+# ========== INICIALIZAR SCHEDULER ==========
+_console_interval = get_console_message_interval_seconds()
+_now = datetime.now()
+scheduler.add_job(
+    console_message_heartbeat,
+    trigger=IntervalTrigger(seconds=_console_interval),
+    id=CONSOLE_MESSAGE_JOB_ID,
+    replace_existing=True,
+    next_run_time=_now,
+)
+scheduler.add_job(
+    mantenimiento_logs,
+    trigger=IntervalTrigger(minutes=5),
+    id=LOG_MANTENIMIENTO_JOB_ID,
+    replace_existing=True,
+)
+logger.info(
+    f"Mensaje consola (independiente): cada {_console_interval} segundos"
+)
+log_activity(f"Aplicación {APP_NOMBRE} iniciada; programaciones de SMS y email activas")
+console_message_heartbeat()
