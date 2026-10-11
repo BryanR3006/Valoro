@@ -43,7 +43,7 @@ Llaves de `config.json`:
   "email": {                              // email
     "api_key": "",                        // obligatorio para enviar
     "from_email": "",                     // obligatorio: remitente
-    "from_alias": ""                      // opcional: nombre del remitente
+    "from_alias": ""                      // opcional: nombre del remitente (por defecto "Valoro")
     // "field_mapping": {"columna": id}   // opcional: columna -> campo personalizado de la cuenta
   }
 }
@@ -79,12 +79,20 @@ falla queda en estado **error** con el mensaje del error.
 
 ## Tablas en BigQuery
 
-- `Temporal.SmsLog` (cada SMS), `Temporal.SmsInfobip` (copia de Infobip para el dashboard), `Temporal.EmailLog`, `Temporal.ProgramacionEmail`. Esquemas de SMS en `sms_bigquery_schema.sql`.
-- Para guardar el mensaje de error de las programaciones de email, la tabla necesita la columna `ultimo_error` (sin ella solo cambia el estado):
+- `Temporal.SmsLog` (cada SMS), `Temporal.SmsInfobip` (copia de Infobip para el dashboard), `Temporal.EmailLog`, `Temporal.ProgramacionEmail_Valoro`. Esquemas de SMS en `sms_bigquery_schema.sql`.
+- Las programaciones de email de Valoro van en su propia tabla `Temporal.ProgramacionEmail_Valoro` (la de QNT es otra, para que una app no envíe las de la otra). Crearla una vez:
 
   ```sql
-  ALTER TABLE `capable-arbor-209819.Temporal.ProgramacionEmail` ADD COLUMN IF NOT EXISTS ultimo_error STRING;
+  CREATE TABLE IF NOT EXISTS `capable-arbor-209819.Temporal.ProgramacionEmail_Valoro` (
+    id STRING, fecha_programada TIMESTAMP, consulta_sql STRING, plantilla STRING, asunto STRING,
+    campana STRING, estado STRING, usuario STRING, reply_email STRING,
+    fecha_creacion TIMESTAMP, fecha_actualizacion TIMESTAMP,
+    tipo STRING,          -- simple o recurrente
+    ultimo_error STRING   -- mensaje del fallo
+  );
   ```
+
+- Email recurrente: sale todos los días a la hora de `fecha_programada`. Después de cada envío queda `pendiente` para el día siguiente. Si falla queda en `error` y se reactiva al editarla.
 
 ## Estructura
 
