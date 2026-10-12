@@ -1,7 +1,8 @@
 /* ============================================
    VALORO - Design System
-   Barra lateral verde oscuro con acentos lima;
-   contenido claro con tarjetas blancas.
+   Barra lateral verde oscuro (ahí el logo lima se lee bien), contenido
+   blanco y texto oscuro. Lima y oro son acentos: sobre fondo claro el texto
+   va en verde oscuro o medio, nunca en lima.
    ============================================ */
 
 :root {
@@ -16,6 +17,11 @@
   --valoro-claro-2: #fbfdf9;
   --valoro-verde: #2f7d1e;
 
+  /* ══════════ DEGRADADOS ══════════ */
+  --grad-oscuro: linear-gradient(135deg, #0c2a17 0%, #143a22 60%, #1f5a1a 100%);
+  --grad-verde: linear-gradient(135deg, #3a961f 0%, #2f7d1e 55%, #256418 100%);
+  --grad-acento: linear-gradient(90deg, #adff00 0%, #d9e800 50%, #f9c400 100%);
+
   /* ══════════ COLORES BASE ══════════ */
   --primary: #2f7d1e;
   --primary-hover: #256418;
@@ -24,14 +30,14 @@
   --accent: #adff00;
 
   /* ══════════ FONDOS ══════════ */
-  --bg-body: #f1f7ec;
+  --bg-body: #f7f8f6;
   --bg-card: #FFFFFF;
-  --bg-sidebar: #071f0f;
+  --bg-sidebar: linear-gradient(180deg, #0c2a17 0%, #071f0f 100%);
   --bg-sidebar-hover: #10331e;
   --bg-sidebar-active: #143a22;
   --bg-input: #FFFFFF;
-  --bg-code: #fbfdf9;
-  --bg-hover: #fbfdf9;
+  --bg-code: #fafbf9;
+  --bg-hover: #f6f9f3;
 
   /* ══════════ TEXTOS ══════════ */
   --text-primary: #10241a;
@@ -41,9 +47,9 @@
   --text-sidebar-active: #FFFFFF;
 
   /* ══════════ BORDES ══════════ */
-  --border: #dde8d6;
-  --border-light: #eaf2e4;
-  --border-hover: #c2d4b8;
+  --border: #e1e6dd;
+  --border-light: #eef1eb;
+  --border-hover: #c6d3bd;
 
   /* ══════════ GEOMETRÍA ══════════ */
   --radius: 12px;
@@ -99,7 +105,7 @@ a:hover { color: var(--primary-hover); text-decoration: none; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--bg-body); }
 ::-webkit-scrollbar-thumb {
-  background: #CDD3E4;
+  background: #c9d6c2;
   border-radius: 5px;
   transition: var(--transition);
 }
@@ -155,11 +161,11 @@ input:focus:not(:focus-visible) {
 }
 
 .sidebar-logo {
-  padding: 22px 24px 18px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 26px 22px 22px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
 }
 
 .sidebar-logo .logo-icon {
@@ -178,17 +184,10 @@ input:focus:not(:focus-visible) {
 }
 
 .sidebar-logo .logo-img {
-  max-width: 160px;
-  max-height: 44px;
+  width: 196px;
+  max-width: 100%;
+  height: auto;
   display: block;
-}
-
-/* Texto de respaldo si falta static/img/logo-valoro.png */
-.sidebar-logo .logo-text {
-  font-size: 1.45rem;
-  font-weight: 800;
-  color: var(--valoro-lima);
-  letter-spacing: -0.02em;
 }
 
 .sidebar-logo:hover { text-decoration: none; }
@@ -285,7 +284,7 @@ input:focus:not(:focus-visible) {
 }
 
 .sidebar-link.active {
-  background: var(--bg-sidebar-active);
+  background: linear-gradient(90deg, rgba(173, 255, 0, 0.14) 0%, rgba(173, 255, 0, 0.03) 100%);
   color: var(--text-sidebar-active);
   font-weight: 600;
 }
@@ -327,6 +326,7 @@ input:focus:not(:focus-visible) {
 /* ===== CONTENT WRAPPER ===== */
 .content-wrapper {
   flex: 1;
+  min-width: 0;  /* las tablas anchas hacen scroll dentro de su tarjeta, no en toda la página */
   min-height: 100vh;
   background: var(--bg-body);
   margin-left: 260px;
@@ -342,6 +342,8 @@ input:focus:not(:focus-visible) {
 .navbar-top {
   background: #fff;
   border-bottom: 1px solid var(--border);
+  border-top: 3px solid transparent;
+  border-image: var(--grad-acento) 1 0 0 0;
   padding: 0 24px;
   height: 60px;
   display: flex;
@@ -415,12 +417,13 @@ input:focus:not(:focus-visible) {
   height: 44px;
   flex-shrink: 0;
   border-radius: 12px;
-  background: var(--primary-light);
-  color: var(--primary);
+  background: var(--grad-oscuro);
+  color: var(--valoro-lima);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 1.2rem;
+  box-shadow: 0 6px 16px rgba(7, 31, 15, 0.18);
 }
 
 /* Páginas que todavía traen su propio icono en el título: no repetirlo. */
@@ -522,7 +525,7 @@ input:focus:not(:focus-visible) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: linear-gradient(135deg, #FAFAFD 0%, #FFFFFF 100%);
+  background: linear-gradient(135deg, #f8faf6 0%, #FFFFFF 100%);
 }
 
 .card-header h3 {
@@ -576,7 +579,7 @@ input:focus:not(:focus-visible) {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-secondary);
-  background: #FAFAFD;
+  background: #f6f8f4;
   padding: 10px 14px;
   text-align: left;
   border-bottom: 1px solid var(--border);
@@ -634,11 +637,12 @@ input:focus:not(:focus-visible) {
   box-shadow: none;
 }
 
-.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary { background: var(--grad-verde); color: #fff; box-shadow: 0 3px 10px rgba(47, 125, 30, 0.25); }
 .btn-primary:hover { background: var(--primary-hover); color: #fff; }
 
-.btn-success { background: var(--success); color: #fff; }
-.btn-success:hover { background: var(--primary-hover); color: #fff; }
+/* Acción principal (enviar): verde oscuro con texto lima. */
+.btn-success { background: var(--grad-oscuro); color: var(--valoro-lima); box-shadow: 0 3px 10px rgba(7, 31, 15, 0.25); }
+.btn-success:hover { background: var(--valoro-fondo); color: var(--valoro-lima); }
 
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-danger:hover { background: #C0392B; color: #fff; }
@@ -647,10 +651,10 @@ input:focus:not(:focus-visible) {
 .btn-warning:hover { background: #e0b000; color: var(--valoro-fondo); }
 
 .btn-info { background: var(--info); color: #fff; }
-.btn-info:hover { background: #2563EB; color: #fff; }
+.btn-info:hover { background: #185a72; color: #fff; }
 
-.btn-secondary { background: #F0F2F8; color: var(--text-secondary); }
-.btn-secondary:hover { background: #E4E7F0; color: var(--text-primary); }
+.btn-secondary { background: #eef1ec; color: var(--text-secondary); }
+.btn-secondary:hover { background: #e2e8de; color: var(--text-primary); }
 
 .btn-outline-primary {
   background: #fff;
@@ -691,7 +695,7 @@ input:focus:not(:focus-visible) {
 }
 .btn-outline-success:hover {
   background: var(--success-bg);
-  color: #0D9668;
+  color: var(--primary-hover);
 }
 
 .btn-sm { padding: 0.35rem 0.75rem; font-size: 0.78rem; border-radius: 8px; }
@@ -721,12 +725,16 @@ input:focus:not(:focus-visible) {
 /* Estados (una sola regla en toda la app):
    verde = bien/activo · azul = en curso · amarillo = pendiente · gris = cancelado/inactivo · rojo = error.
    El texto va un tono más oscuro que el color base para que se lea sobre el fondo claro. */
-.badge-success { background: var(--success-bg); color: #047857; }
+.badge-success { background: var(--success-bg); color: #1d5c12; }
 .badge-danger { background: var(--danger-bg); color: #B42318; }
 .badge-warning { background: var(--warning-bg); color: #8a6a00; }
 .badge-info { background: var(--info-bg); color: var(--info); }
 .badge-primary { background: var(--primary-light); color: var(--primary); }
-.badge-secondary { background: #F0F2F8; color: var(--text-secondary); }
+.badge-secondary { background: #eef1ec; color: var(--text-secondary); }
+
+/* Pantallas con dos modos (Enviar / Programaciones): lo de un solo modo. */
+.modo-enviar .solo-programar,
+.modo-programar .solo-enviar { display: none !important; }
 
 /* Casilla + texto en la misma línea (sin Bootstrap CSS la casilla quedaba encima del texto). */
 .form-check {
@@ -1099,7 +1107,7 @@ label {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: linear-gradient(135deg, #FAFAFD 0%, #FFFFFF 100%);
+  background: linear-gradient(135deg, #f8faf6 0%, #FFFFFF 100%);
 }
 
 .modal-header h3 {
@@ -1266,7 +1274,7 @@ label {
   position: absolute;
   cursor: pointer;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: #CBD5E1;
+  background: #cfd8ca;
   transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   border-radius: 24px;
 }
@@ -1695,7 +1703,7 @@ label {
 
 /* ===== SECCIÓN DATOS ===== */
 .sms-auto-section {
-  background: #FAFAFD;
+  background: #fafbf9;
   border: 1.5px dashed var(--border);
   border-radius: 12px;
   padding: 16px 18px;
@@ -1750,19 +1758,20 @@ label {
 }
 
 .sms-actions .btn-success {
-  background: var(--success);
-  color: #fff;
-  box-shadow: 0 6px 16px rgba(16, 185, 129, 0.28);
+  background: var(--grad-oscuro);
+  color: var(--valoro-lima);
+  box-shadow: 0 6px 16px rgba(7, 31, 15, 0.25);
 }
-.sms-actions .btn-success:hover { background: #0D9668; }
+.sms-actions .btn-success:hover { background: var(--valoro-fondo); }
 .sms-actions .btn-success:disabled {
-  background: #B9C0CC;
+  background: #c3cbbf;
+  color: #fff;
   box-shadow: none;
   cursor: not-allowed;
   transform: none;
 }
 
-.sms-actions .btn-primary { background: var(--primary); color: #fff; }
+.sms-actions .btn-primary { background: var(--grad-verde); color: #fff; }
 .sms-actions .btn-primary:hover { background: var(--primary-hover); }
 
 .sms-actions .btn-outline-secondary {
@@ -1925,7 +1934,7 @@ label {
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
-  background: linear-gradient(135deg, #F0F2F8 0%, #FAFAFD 100%);
+  background: linear-gradient(135deg, #eef1ec 0%, #fafbf9 100%);
   border: 1.5px solid var(--border);
   border-radius: 12px;
   transition: var(--transition);
@@ -1954,7 +1963,7 @@ label {
   position: absolute;
   cursor: pointer;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: #CBD5E1;
+  background: #cfd8ca;
   transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   border-radius: 24px;
 }
@@ -2001,7 +2010,7 @@ label {
 }
 
 .stat-item {
-  background: #FAFAFD;
+  background: #fafbf9;
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 14px 12px;

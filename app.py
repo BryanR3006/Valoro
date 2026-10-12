@@ -41,38 +41,6 @@ PROJECT_ID = "capable-arbor-209819"
 bq_client = None
 
 
-OPERADORES_SMS = [
-    "HELLO_BPO",
-    "QNT_RBK_2",
-    "MORACERO_CD2",
-    "QNT_RBK_1.2",
-    "AVALOGIC",
-    "DIGITAL_MONTOS_BAJOS",
-    "DIGITAL_ESPECIAL",
-    "PAZ_SALVO",
-    "MANTENIMIENTO_DIGITAL",
-    "DIGITAL_1",
-    "QNT_PERSONA_JURIDICA",
-    "QNT_JUD",
-    "MANTENIMIENTO-QNT",
-    "DIGITAL_2",
-    "GRADUADOS",
-    "QNT_OPERADOR_ESPECIAL",
-    "GENNIALS_BPO_CD",
-    "QNT_COBRO",
-    "VICBRA",
-    "MORACERO_CD",
-    "QNT_FALLECIDOS",
-    "QNT_RECAUDO",
-    "QNT_RBK_1.1",
-    "SATELITE_1",
-    "MANTENIMIENTO-QNT-MORAS-ALTAS",
-    "MANTENIMIENTO-ESP-QNT",
-    "VENTAS_TERCEROSJUD"
-]
-
-
-
 #==================== CONFIGURACIÓN DE LOGS ====================
 # logger_sms escribe en logs/sms.log y logger_email en logs/email.log (ver backend.py).
 
@@ -90,13 +58,127 @@ def _endpoint_actual():
 
 @app.route("/")
 def index():
-    """Inicio: accesos a SMS y Email, programaciones SMS pendientes/con error y la actividad reciente."""
+    """Inicio: lo enviado hoy (lo carga /api/inicio/resumen) y la actividad reciente."""
+    return render_template("index.html")
+
+
+def _hora_colombia(fecha):
+    """'HH:MM' en hora de Colombia de una fecha UTC (con o sin zona). Vacío si no hay fecha."""
+    if not fecha:
+        return ""
+    if fecha.tzinfo is None:
+        fecha = pytz.utc.localize(fecha)
+    return fecha.astimezone(COLOMBIA_TZ).strftime("%H:%M")
+
+
+def _programaciones_sms_de_hoy(hoy):
+    """
+    Programaciones SMS (SQLite) que ya corrieron hoy, que tocan hoy o que
+    quedaron con error. estado_hoy: corrio / pendiente / error.
+    """
     from database import ProgramacionSms
-    return render_template(
-        "index.html",
-        sms_pendientes=ProgramacionSms.query.filter_by(estado='pendiente').count(),
-        sms_con_error=ProgramacionSms.query.filter(ProgramacionSms.estado.in_(['error', 'fallido'])).count(),
-    )
+    filas = []
+    for prog in ProgramacionSms.query.filter(ProgramacionSms.estado != "cancelado").all():
+        tipo = (prog.tipo_programacion or "simple").lower()
+        # fecha_ejecucion se guarda en UTC; fecha_programada en hora de Colombia.
+        ejecucion = prog.fecha_ejecucion and pytz.utc.localize(prog.fecha_ejecucion).astimezone(COLOMBIA_TZ)
+        corrio = bool(ejecucion) and ejecucion.date() == hoy
+        if tipo == "recurrente":
+            hora = prog.hora_inicio or ""
+            toca = prog.estado == "pendiente" and not (prog.fecha_fin and prog.fecha_fin < hoy.isoformat())
+        else:
+            hora = prog.fecha_programada.strftime("%H:%M") if prog.fecha_programada else ""
+            toca = prog.estado == "pendiente" and bool(prog.fecha_programada) and prog.fecha_programada.date() == hoy
+        if prog.estado in ("error", "fallido"):
+            estado_hoy = "error"
+        elif corrio:
+            estado_hoy = "corrio"
+        elif toca:
+            estado_hoy = "pendiente"
+        else:
+            continue
+        filas.append({
+            "canal": "sms", "id": prog.id, "campana": prog.campana, "tipo": tipo, "hora": hora,
+            "estado_hoy": estado_hoy, "corrio_a_las": ejecucion.strftime("%H:%M") if corrio else "",
+            "mensajes": prog.ultimo_enviados if corrio else None, "error": prog.ultimo_error or "",
+        })
+    return filas
+
+
+def _programaciones_email_de_hoy(hoy, enviados_por_campana):
+    """
+    Programaciones de email (BigQuery) que corrieron hoy, tocan hoy o tienen
+    error. Si corrió se sabe por EmailLog: mensajes de hoy con su campaña.
+    """
+    filas = []
+    for p in bq_client.query(f"""
+        SELECT * FROM `{PROGRAMACION_EMAIL_TABLE}`
+        WHERE estado IN ('pendiente', 'enviando', 'error')
+           OR DATE(fecha_actualizacion, 'America/Bogota') = CURRENT_DATE('America/Bogota')
+    """).result():
+        # fecha_programada es la hora de Colombia guardada como si fuera UTC.
+        fecha = p["fecha_programada"].replace(tzinfo=None) if p["fecha_programada"] else None
+        enviados = enviados_por_campana.get(p["campana"] or "")
+        if p["estado"] == "error":
+            estado_hoy = "error"
+        elif enviados or (p["estado"] == "enviado" and fecha and fecha.date() == hoy):
+            estado_hoy = "corrio"
+        elif p["estado"] in ("pendiente", "enviando") and fecha and fecha.date() == hoy:
+            estado_hoy = "pendiente"
+        else:
+            continue
+        filas.append({
+            "canal": "email", "id": p["id"], "campana": p["campana"] or "", "tipo": p.get("tipo") or "simple",
+            "hora": fecha.strftime("%H:%M") if fecha else "", "estado_hoy": estado_hoy,
+            "corrio_a_las": enviados["ultimo"] if enviados else "",
+            "mensajes": enviados["mensajes"] if enviados else None, "error": p.get("ultimo_error") or "",
+        })
+    return filas
+
+
+@app.route("/api/inicio/resumen")
+def inicio_resumen():
+    """
+    Lo enviado hoy (hora de Colombia): total de SMS y emails (SmsLog / EmailLog),
+    mensajes por campaña y las programaciones de hoy con su estado. Si BigQuery
+    falla responde igual con lo de SQLite y el error en 'avisos'.
+    """
+    from bigquery import mensaje_error_bigquery
+    hoy = datetime.now(COLOMBIA_TZ).date()
+    avisos = []
+    totales = {"sms": None, "email": None}
+    campanas = []
+    enviados_email = {}
+    programaciones = _programaciones_sms_de_hoy(hoy)
+
+    if _asegurar_bq():
+        for canal, tabla in (("sms", SMS_LOG_TABLE), ("email", EMAIL_LOG_TABLE)):
+            try:
+                filas = list(bq_client.query(f"""
+                    SELECT campana, COUNT(*) AS mensajes, MAX(fecha_envio) AS ultimo
+                    FROM `{tabla}`
+                    WHERE DATE(fecha_envio, 'America/Bogota') = CURRENT_DATE('America/Bogota')
+                    GROUP BY campana ORDER BY ultimo DESC
+                """).result())
+            except Exception as exc:
+                avisos.append(f"{'SMS' if canal == 'sms' else 'Emails'} enviados hoy: {mensaje_error_bigquery(exc)}")
+                continue
+            totales[canal] = sum(f["mensajes"] for f in filas)
+            for f in filas:
+                fila = {"canal": canal, "campana": f["campana"] or "", "mensajes": f["mensajes"],
+                        "ultimo": _hora_colombia(f["ultimo"])}
+                campanas.append(fila)
+                if canal == "email":
+                    enviados_email[fila["campana"]] = fila
+        try:
+            programaciones += _programaciones_email_de_hoy(hoy, enviados_email)
+        except Exception as exc:
+            avisos.append(f"Programaciones de email: {mensaje_error_bigquery(exc)}")
+    else:
+        avisos.append("No se pudo conectar a BigQuery: faltan los totales y las programaciones de email.")
+
+    return jsonify({"success": True, "fecha": hoy.isoformat(), "totales": totales,
+                    "campanas": campanas, "programaciones": programaciones, "avisos": avisos})
 
 
 
@@ -289,7 +371,8 @@ def _respuesta_faltantes(faltan):
 
 @app.route("/config-sms")
 def config_sms():
-    return render_template("config_sms.html")
+    """Enviar SMS ya. Las programaciones usan la misma pantalla (sms_programaciones_pagina)."""
+    return render_template("config_sms.html", modo="enviar")
 
 
 
@@ -521,6 +604,7 @@ def execute_sms_schedule(schedule_id: str):
 
             prog.fecha_ejecucion = datetime.utcnow()
             prog.total_destinatarios = resultado.get("total_preparados", 0)
+            prog.ultimo_enviados = resultado.get("enviados", 0)
             prog.ultimo_error = None
             prog.fecha_actualizacion = datetime.utcnow()
             db.session.commit()
@@ -820,138 +904,43 @@ scheduler.add_job(_recargar_programaciones_sms, trigger=DateTrigger(
 
 
 
-@app.route("/api/sms/operadores", methods=["GET"])
-def sms_operadores():
-    try:
-        return jsonify({
-            "success": True, "items": OPERADORES_SMS,
-            "message": "Lista de operadores obtenida correctamente"
-            })
-        
-    except Exception as exc:
-        return jsonify({
-            "success": False, "message": str(exc)
-            }), 500
-
-
-@app.route("/api/sms/tipos-por-operador", methods=["GET"])
-def sms_tipos_por_operador():
-    try:
-        from database import MensajeOperacion
-        operador = (request.args.get("operador") or "").strip()
-        if not operador:
-            return jsonify({"success": False, "message": "Se requiere operador"}), 400
-        tipos = MensajeOperacion.query.filter(
-            MensajeOperacion.Estado == 1,
-            (MensajeOperacion.Operador == operador) | (MensajeOperacion.Operadores.contains(operador))
-        ).with_entities(MensajeOperacion.Tipo).distinct().order_by(MensajeOperacion.Tipo).all()
-        items = [t[0] for t in tipos if t[0]]
-        return jsonify({"success": True, "items": items})
-    except Exception as exc:
-        return jsonify({"success": False, "message": str(exc)}), 500
-
-
-@app.route("/api/sms/tipos-por-categoria", methods=["GET"])
-def sms_tipos_por_categoria():
-    try:
-        from database import MensajeOperacion
-        categoria = (request.args.get("categoria") or "").strip()
-        if not categoria:
-            return jsonify({"success": False, "message": "Se requiere categoría"}), 400
-        tipos = MensajeOperacion.query.filter(
-            MensajeOperacion.Estado == 1, MensajeOperacion.Categoria == categoria
-        ).filter(MensajeOperacion.Tipo.isnot(None), MensajeOperacion.Tipo != '') \
-            .with_entities(MensajeOperacion.Tipo).distinct().order_by(MensajeOperacion.Tipo).all()
-        items = [t[0] for t in tipos if t[0]]
-        return jsonify({"success": True, "items": items})
-    except Exception as exc:
-        return jsonify({"success": False, "message": str(exc)}), 500
-
-
-@app.route("/api/sms/categorias", methods=["GET"])
-def sms_categorias():
-    try:
-        from database import MensajeOperacion
-        categorias = MensajeOperacion.query.filter(
-            MensajeOperacion.Estado == 1,
-            MensajeOperacion.Categoria.isnot(None), MensajeOperacion.Categoria != ''
-        ).with_entities(MensajeOperacion.Categoria).distinct().order_by(MensajeOperacion.Categoria).all()
-        items = [c[0] for c in categorias if c[0]]
-        return jsonify({"success": True, "items": items})
-    except Exception as exc:
-        return jsonify({"success": False, "message": str(exc)}), 500
-
-
-@app.route("/api/sms/categorias-por-operador", methods=["GET"])
-def sms_categorias_por_operador():
-    try:
-        from database import MensajeOperacion
-        operador = (request.args.get("operador") or "").strip()
-        if not operador:
-            return jsonify({"success": False, "message": "Se requiere operador"}), 400
-        categorias = MensajeOperacion.query.filter(
-            MensajeOperacion.Estado == 1,
-            (MensajeOperacion.Operador == operador) | (MensajeOperacion.Operadores.contains(operador)),
-            MensajeOperacion.Categoria.isnot(None), MensajeOperacion.Categoria != ''
-        ).with_entities(MensajeOperacion.Categoria).distinct().order_by(MensajeOperacion.Categoria).all()
-        items = [c[0] for c in categorias if c[0]]
-        return jsonify({"success": True, "items": items})
-    except Exception as exc:
-        return jsonify({"success": False, "message": str(exc)}), 500
-
-
-@app.route("/api/sms/tipos", methods=["GET"])
-def sms_tipos_flexibles():
-    try:
-        from database import MensajeOperacion
-        operador = (request.args.get("operador") or "").strip()
-        categoria = (request.args.get("categoria") or "").strip()
-        query = MensajeOperacion.query.filter(MensajeOperacion.Estado == 1)
-        if operador:
-            query = query.filter((MensajeOperacion.Operador == operador) | (MensajeOperacion.Operadores.contains(operador)))
-        if categoria:
-            query = query.filter(MensajeOperacion.Categoria == categoria)
-        tipos = query.filter(MensajeOperacion.Tipo.isnot(None), MensajeOperacion.Tipo != '') \
-            .with_entities(MensajeOperacion.Tipo).distinct().order_by(MensajeOperacion.Tipo).all()
-        items = [t[0] for t in tipos if t[0]]
-        return jsonify({"success": True, "items": items})
-    except Exception as exc:
-        return jsonify({"success": False, "message": str(exc)}), 500
-
-
-@app.route("/api/sms/mensajes-operacion", methods=["GET"])
-def sms_mensajes_operacion_flexible():
-    try:
-        from database import MensajeOperacion
-        operador = (request.args.get("operador") or "").strip()
-        tipo = (request.args.get("tipo") or "").strip()
-        categoria = (request.args.get("categoria") or "").strip()
-        query = MensajeOperacion.query.filter(MensajeOperacion.Estado == 1)
-        if operador:
-            query = query.filter((MensajeOperacion.Operador == operador) | (MensajeOperacion.Operadores.contains(operador)))
-        if tipo:
-            query = query.filter(MensajeOperacion.Tipo == tipo)
-        if categoria:
-            query = query.filter(MensajeOperacion.Categoria == categoria)
-        mensajes = query.order_by(MensajeOperacion.Operador, MensajeOperacion.Tipo, MensajeOperacion.id.desc()).all()
-        items = [m.to_dict() for m in mensajes]
-        return jsonify({"success": True, "items": items})
-    except Exception as exc:
-        return jsonify({"success": False, "message": str(exc)}), 500
-
-
 # ==================== SMS - CRUD MENSAJES (SQLite) ====================
+
+# Sugerencias para el "momento" de las plantillas SMS y email; se suman los ya guardados.
+MOMENTOS_SUGERIDOS = ["Mora corta", "Mora larga", "Cliente al día", "Acuerdo de pago",
+                      "Recordatorio de pago", "Paz y salvo"]
+
+
+def _momentos():
+    """Momentos sugeridos más los guardados en plantillas SMS y email, sin repetir."""
+    from database import MensajeOperacion, PlantillaEmail
+    guardados = [m for (m,) in db.session.query(MensajeOperacion.Momento).distinct()]
+    guardados += [m for (m,) in db.session.query(PlantillaEmail.momento).distinct()]
+    vistos, lista = set(), []
+    for momento in MOMENTOS_SUGERIDOS + sorted(m.strip() for m in guardados if m and m.strip()):
+        if momento.lower() not in vistos:
+            vistos.add(momento.lower())
+            lista.append(momento)
+    return lista
+
 
 @app.route("/config-mensajes")
 def config_mensajes():
-    return render_template("config_mensajes.html")
+    return render_template("config_mensajes.html", momentos=_momentos())
 
 
 @app.route("/api/sms/mensajes", methods=["GET"])
 def api_mensajes_list():
+    """Plantillas SMS. ?momento=X filtra por momento; ?activos=1 solo las activas (constructor)."""
     try:
         from database import MensajeOperacion
-        mensajes = MensajeOperacion.query.order_by(MensajeOperacion.Operador, MensajeOperacion.Tipo, MensajeOperacion.id.desc()).all()
+        query = MensajeOperacion.query
+        momento = (request.args.get("momento") or "").strip()
+        if momento:
+            query = query.filter(MensajeOperacion.Momento == momento)
+        if request.args.get("activos") == "1":
+            query = query.filter(MensajeOperacion.Estado == 1)
+        mensajes = query.order_by(MensajeOperacion.Momento, MensajeOperacion.id.desc()).all()
         return jsonify({"success": True, "items": [m.to_dict() for m in mensajes]})
     except Exception as exc:
         return jsonify({"success": False, "message": str(exc)}), 500
@@ -962,15 +951,12 @@ def api_mensajes_create():
     try:
         from database import MensajeOperacion, db
         data = request.get_json() or {}
-        operador = (data.get("operador") or "").strip()
+        momento = (data.get("momento") or "").strip()
         mensaje_texto = (data.get("mensaje") or "").strip()
-        tipo = (data.get("tipo") or "").strip()
-        operadores = (data.get("operadores") or "").strip()
-        categoria = (data.get("categoria") or "").strip()
         estado = int(data.get("estado", 1))
-        if not operador or not mensaje_texto:
-            return jsonify({"success": False, "message": "Operador y mensaje son obligatorios"}), 400
-        nuevo = MensajeOperacion(Operador=operador, Mensaje=mensaje_texto, Tipo=tipo, Categoria=categoria, Operadores=operadores, Estado=estado)
+        if not momento or not mensaje_texto:
+            return jsonify({"success": False, "message": "Momento y mensaje son obligatorios"}), 400
+        nuevo = MensajeOperacion(Momento=momento, Mensaje=mensaje_texto, Estado=estado)
         db.session.add(nuevo)
         db.session.commit()
         return jsonify({"success": True, "message": "Mensaje creado", "item": nuevo.to_dict()})
@@ -986,12 +972,12 @@ def api_mensajes_update(mensaje_id):
         if not mensaje:
             return jsonify({"success": False, "message": "Mensaje no encontrado"}), 404
         data = request.get_json() or {}
-        if "operador" in data: mensaje.Operador = data["operador"].strip()
+        if "momento" in data: mensaje.Momento = data["momento"].strip()
         if "mensaje" in data: mensaje.Mensaje = data["mensaje"].strip()
-        if "tipo" in data: mensaje.Tipo = data["tipo"].strip()
-        if "categoria" in data: mensaje.Categoria = data["categoria"].strip()
         if "estado" in data: mensaje.Estado = int(data["estado"])
-        if "operadores" in data: mensaje.Operadores = data["operadores"].strip()
+        if not mensaje.Momento or not mensaje.Mensaje:
+            db.session.rollback()
+            return jsonify({"success": False, "message": "Momento y mensaje son obligatorios"}), 400
         db.session.commit()
         return jsonify({"success": True, "message": "Mensaje actualizado", "item": mensaje.to_dict()})
     except Exception as exc:
@@ -1033,7 +1019,14 @@ def api_mensajes_toggle(mensaje_id):
 
 @app.route("/config-email")
 def config_email():
-    return render_template("config_email.html")
+    """Enviar email ya (con historial). Las programaciones usan la misma pantalla."""
+    return render_template("config_email.html", modo="enviar")
+
+
+@app.route("/email/programaciones")
+def email_programaciones_pagina():
+    """Crear programaciones de email (simples o recurrentes) y ver/editar/cancelar las existentes."""
+    return render_template("config_email.html", modo="programar")
 
 
 # ==================== EMAIL - CAMPOS OBLIGATORIOS ====================
@@ -1617,7 +1610,7 @@ def email_cancelar_programacion(schedule_id):
 
 @app.route("/email/plantillas", methods=["GET"])
 def email_plantillas_pagina():
-    return render_template("email_plantillas.html")
+    return render_template("email_plantillas.html", momentos=_momentos())
 
 
 @app.route("/api/email/plantillas", methods=["GET"])
@@ -1631,14 +1624,15 @@ def email_plantillas_listar():
 
 
 def _leer_plantilla_formulario():
-    """(nombre, asunto, html, usuario, errores) del JSON recibido."""
+    """(nombre, asunto, html, momento, usuario, errores) del JSON recibido."""
     from services.email_service import errores_plantilla
     data = request.get_json(silent=True) or {}
     nombre = re.sub(r"\s+", " ", str(data.get("nombre") or "")).strip()
     asunto = str(data.get("asunto") or "").strip()
     html = str(data.get("html") or "").strip()
+    momento = str(data.get("momento") or "").strip() or None
     usuario = str(data.get("usuario") or "").strip() or None
-    return nombre, asunto, html, usuario, errores_plantilla(nombre, asunto, html)
+    return nombre, asunto, html, momento, usuario, errores_plantilla(nombre, asunto, html)
 
 
 def _nombre_plantilla_repetido(nombre, excepto_id=None):
@@ -1655,12 +1649,12 @@ def _nombres_plantillas():
 @app.route("/api/email/plantillas", methods=["POST"])
 def email_plantillas_crear():
     from database import PlantillaEmail
-    nombre, asunto, html, usuario, errores = _leer_plantilla_formulario()
+    nombre, asunto, html, momento, usuario, errores = _leer_plantilla_formulario()
     if not errores and _nombre_plantilla_repetido(nombre):
         errores.append(f"Ya existe una plantilla llamada '{nombre}'.")
     if errores:
         return jsonify({"success": False, "message": " ".join(errores)}), 400
-    plantilla = PlantillaEmail(nombre=nombre, asunto=asunto, html=html, usuario=usuario, activa=True)
+    plantilla = PlantillaEmail(nombre=nombre, momento=momento, asunto=asunto, html=html, usuario=usuario, activa=True)
     db.session.add(plantilla)
     db.session.commit()
     log_activity(f"📧 Plantilla de email creada (id {plantilla.id}): {nombre}")
@@ -1678,7 +1672,7 @@ def email_plantillas_editar(plantilla_id):
     plantilla = db.session.get(PlantillaEmail, plantilla_id)
     if not plantilla:
         return jsonify({"success": False, "message": "Plantilla no encontrada."}), 404
-    nombre, asunto, html, usuario, errores = _leer_plantilla_formulario()
+    nombre, asunto, html, momento, usuario, errores = _leer_plantilla_formulario()
     if errores:
         return jsonify({"success": False, "message": " ".join(errores)}), 400
     cambia_contenido = asunto != (plantilla.asunto or "") or html != plantilla.html
@@ -1690,7 +1684,7 @@ def email_plantillas_editar(plantilla_id):
                 "message": f"Esta plantilla ya se usó en {plantilla.usos} envío(s). "
                            "¿Guardar los cambios como una plantilla nueva?",
             }), 409
-        nueva = PlantillaEmail(nombre=nombre_libre(nombre, _nombres_plantillas(), "v"),
+        nueva = PlantillaEmail(nombre=nombre_libre(nombre, _nombres_plantillas(), "v"), momento=momento,
                                asunto=asunto, html=html, usuario=usuario, activa=True)
         db.session.add(nueva)
         db.session.commit()
@@ -1698,7 +1692,7 @@ def email_plantillas_editar(plantilla_id):
         return jsonify({"success": True, "plantilla": nueva.a_dict(), "nueva": True})
     if _nombre_plantilla_repetido(nombre, excepto_id=plantilla.id):
         return jsonify({"success": False, "message": f"Ya existe una plantilla llamada '{nombre}'."}), 400
-    plantilla.nombre, plantilla.asunto, plantilla.html = nombre, asunto, html
+    plantilla.nombre, plantilla.asunto, plantilla.html, plantilla.momento = nombre, asunto, html, momento
     if usuario:
         plantilla.usuario = usuario
     db.session.commit()
@@ -1715,7 +1709,7 @@ def email_plantillas_duplicar(plantilla_id):
         return jsonify({"success": False, "message": "Plantilla no encontrada."}), 404
     usuario = str((request.get_json(silent=True) or {}).get("usuario") or "").strip() or original.usuario
     copia = PlantillaEmail(nombre=nombre_libre(original.nombre, _nombres_plantillas(), "copia "),
-                           asunto=original.asunto, html=original.html, usuario=usuario, activa=True)
+                           momento=original.momento, asunto=original.asunto, html=original.html, usuario=usuario, activa=True)
     db.session.add(copia)
     db.session.commit()
     log_activity(f"📧 Plantilla de email duplicada: {original.nombre} -> {copia.nombre}")
@@ -1788,10 +1782,11 @@ def download_file(filename):
 
 # ================== SMS - PROGRAMACIONES (PÁGINA) ==================
 
-@app.route("/api/sms/ver_programaciones")
+@app.route("/sms/programaciones")
+@app.route("/api/sms/ver_programaciones")  # dirección vieja
 def sms_programaciones_pagina():
-    """Página para ver todas las programaciones de SMS."""
-    return render_template("sms/programaciones.html")
+    """Crear programaciones SMS (simples o recurrentes) y ver/editar/cancelar/reintentar las existentes."""
+    return render_template("config_sms.html", modo="programar")
 
 
 # ================== API PROGRAMACIONES ==================
@@ -1810,6 +1805,7 @@ def _prog_sms_a_dict(prog):
         'estado': prog.estado,
         'ultimo_error': prog.ultimo_error or '',
         'total_destinatarios': prog.total_destinatarios,
+        'ultimo_enviados': prog.ultimo_enviados,
         'confirmar_reenvio': prog.confirmar_reenvio,
         'fecha_programada': prog.fecha_programada.isoformat() if prog.fecha_programada else None,
         'hora_inicio': prog.hora_inicio,

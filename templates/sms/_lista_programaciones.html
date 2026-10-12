@@ -1,411 +1,38 @@
-{% extends "layouts/adminlte.html" %}
-
-{% block title %}Historial de Programaciones{% endblock %}
-
-{% block page_title %}
-  <div class="d-flex align-items-center">
-    <div class="mr-3" style="font-size:2rem; color: #3452E1;">
-      <i class="fas fa-clock-history"></i>
-    </div>
-    <div>
-      <h1 class="m-0" style="font-weight:700;">Historial de Programaciones</h1>
-      <small class="text-muted">Lista de todas las programaciones de campañas SMS</small>
-    </div>
-  </div>
-{% endblock %}
-
-{% block breadcrumb %}
-<li><a href="/api/sms/ver_programaciones">Programaciones</a></li>
-<li class="active">Historial</li>
-{% endblock %}
-
-{% block extra_css %}
+{# Lista de programaciones SMS con su edición. La incluye config_sms.html en modo "programar". #}
 <style>
-  :root {
-    --sms-primary: #3452E1;
-    --sms-primary-dark: #2438B0;
-    --sms-primary-light: #EEF1FD;
-    --sms-success: #17A673;
-    --sms-success-bg: #E7F8F1;
-    --sms-danger: #E24C4B;
-    --sms-danger-bg: #FCEAEA;
-    --sms-warning: #B8790A;
-    --sms-warning-bg: #FDF2E1;
-    --sms-info: #00B4D8;
-    --sms-info-bg: #E3F6FC;
-    --sms-text: #1C2333;
-    --sms-muted: #6B7280;
-    --sms-border: #E4E7F0;
-    --sms-bg: #F5F6FA;
-    --sms-radius: 16px;
-    --sms-shadow: 0 8px 30px rgba(31, 41, 102, 0.08);
-    --sms-transition: all 0.25s ease;
+  /* Lista de programaciones SMS (va debajo del formulario en Programaciones SMS) */
+  .prog-lista { margin-top: 24px; }
+  .prog-lista .card-header { flex-wrap: wrap; gap: 12px; }
+  .prog-lista .card-body { padding: 0; overflow-x: auto; }
+  .prog-lista table { width: 100%; min-width: 1000px; border-collapse: collapse; }
+  .prog-lista .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .prog-lista .filter-bar select {
+    border: 1.5px solid var(--border); border-radius: 8px; padding: 6px 12px;
+    font-size: 0.8rem; background: #fff; color: var(--text-primary);
   }
-
-  .content-wrapper { background: var(--sms-bg); }
-
-  .sms-container {
-    max-width: 100%;
-    padding: 0 20px;
+  .prog-lista .empty-state { text-align: center; padding: 48px 20px; color: var(--text-secondary); }
+  .prog-lista .empty-state i { font-size: 2.6rem; display: block; margin-bottom: 12px; opacity: 0.3; }
+  .prog-lista code.prog-id {
+    color: var(--primary); background: var(--primary-light);
+    padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 700;
   }
-
-  .table-card {
-    background: #ffffff;
-    border: 1px solid var(--sms-border);
-    border-radius: var(--sms-radius);
-    box-shadow: var(--sms-shadow);
-    overflow: hidden;
+  .prog-lista .footer-info {
+    padding: 12px 20px; border-top: 1px solid var(--border); display: flex;
+    justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.8rem; color: var(--text-secondary);
   }
-  .table-card .card-header {
-    padding: 18px 24px;
-    border-bottom: 1px solid var(--sms-border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-    background: #FAFAFD;
-  }
-  .table-card .card-header h3 {
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 700;
-    color: var(--sms-text);
-  }
-  .table-card .card-header h3 i {
-    color: var(--sms-primary);
-    margin-right: 8px;
-  }
-  .table-card .card-body {
-    padding: 0;
-    overflow-x: auto;
-  }
-  .table-card table {
-    width: 100%;
-    font-size: 0.85rem;
-    border-collapse: collapse;
-    min-width: 1000px;
-  }
-  .table-card table thead {
-    background: #F8FAFC;
-  }
-  .table-card table th {
-    font-weight: 600;
-    color: var(--sms-muted);
-    padding: 12px 16px;
-    border-bottom: 2px solid var(--sms-border);
-    white-space: nowrap;
-    text-transform: uppercase;
-    font-size: 0.7rem;
-    letter-spacing: 0.5px;
-  }
-  .table-card table td {
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--sms-border);
-    vertical-align: middle;
-  }
-  .table-card table tbody tr {
-    transition: var(--sms-transition);
-  }
-  .table-card table tbody tr:hover {
-    background: var(--sms-primary-light);
-  }
-
-  /* Badges */
-  .badge {
-    padding: 4px 12px;
-    border-radius: 999px;
-    font-size: 0.7rem;
-    font-weight: 600;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .badge-success { background: var(--sms-success-bg); color: var(--sms-success); }
-  .badge-danger  { background: var(--sms-danger-bg);  color: var(--sms-danger); }
-  .badge-warning { background: var(--sms-warning-bg); color: var(--sms-warning); }
-  .badge-info    { background: var(--sms-info-bg);    color: var(--sms-info); }
-  .badge-secondary { background: #F1F3F8; color: var(--sms-muted); }
-  .badge-primary { background: var(--sms-primary-light); color: var(--sms-primary); }
-
-  /* Botones */
-  .btn-group .btn {
-    padding: 4px 10px;
-    font-size: 0.75rem;
-    border-radius: 6px;
-    border: none;
-    transition: var(--sms-transition);
-  }
-  .btn-group .btn:hover { transform: scale(1.05); }
-
-  .btn-outline-warning { color: var(--sms-warning); border: 1px solid var(--sms-warning); background: transparent; }
-  .btn-outline-warning:hover { background: var(--sms-warning); color: #fff; }
-  .btn-outline-danger { color: var(--sms-danger); border: 1px solid var(--sms-danger); background: transparent; }
-  .btn-outline-danger:hover { background: var(--sms-danger); color: #fff; }
-  .btn-outline-primary { color: var(--sms-primary); border: 1px solid var(--sms-primary); background: transparent; }
-  .btn-outline-primary:hover { background: var(--sms-primary); color: #fff; }
-  .btn-outline-success { color: var(--sms-success); border: 1px solid var(--sms-success); background: transparent; }
-  .btn-outline-success:hover { background: var(--sms-success); color: #fff; }
-
-  /* Filtros */
-  .filter-bar {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-  .filter-bar select {
-    border: 1.5px solid var(--sms-border);
-    border-radius: 8px;
-    padding: 6px 12px;
-    font-size: 0.8rem;
-    background: white;
-    color: var(--sms-text);
-    transition: var(--sms-transition);
-  }
-  .filter-bar select:focus {
-    border-color: var(--sms-primary);
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(52, 82, 225, 0.1);
-  }
-  .filter-bar .btn {
-    padding: 6px 14px;
-    font-size: 0.8rem;
-    border-radius: 8px;
-  }
-
-  .btn-primary { background: var(--sms-primary); color: #fff; }
-  .btn-primary:hover { background: var(--sms-primary-dark); }
-  .btn-outline-secondary { background: #fff; color: var(--sms-muted); border: 1.5px solid var(--sms-border); }
-  .btn-outline-secondary:hover { background: #F0F2F8; color: var(--sms-text); }
-
-  /* Estado vacío */
-  .empty-state { text-align: center; padding: 60px 20px; color: var(--sms-muted); }
-  .empty-state i { font-size: 3rem; display: block; margin-bottom: 16px; opacity: 0.3; }
-  .empty-state p { font-size: 0.95rem; }
-  .empty-state .btn { margin-top: 12px; }
-
-  /* Código */
-  code.text-primary {
-    color: var(--sms-primary);
-    background: var(--sms-primary-light);
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.8rem;
-    font-weight: 600;
-  }
-
-  /* ========== MODAL ========== */
-  .modal-overlay {
-    display: none;
-    position: fixed;
-    top: 0; left: 0; width: 100%; height: 100%;
-    background: rgba(0,0,0,0.5);
-    z-index: 9998;
-    justify-content: center;
-    align-items: center;
-    animation: fadeIn 0.3s ease;
-  }
-  .modal-overlay.active { display: flex; }
-
-  .modal-box {
-    background: #fff;
-    border-radius: var(--sms-radius);
-    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-    width: 90%;
-    max-width: 600px;
-    max-height: 90vh;
-    overflow-y: auto;
-    animation: slideUp 0.3s ease;
-    padding: 0;
-  }
-  .modal-header {
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--sms-border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: #FAFAFD;
-    border-radius: var(--sms-radius) var(--sms-radius) 0 0;
-  }
-  .modal-header h3 {
-    margin: 0;
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: var(--sms-text);
-  }
-  .modal-header h3 i { color: var(--sms-primary); margin-right: 8px; }
-  .modal-close {
-    background: none;
-    border: none;
-    font-size: 1.5rem;
-    color: var(--sms-muted);
-    cursor: pointer;
-    padding: 0 8px;
-    transition: var(--sms-transition);
-  }
-  .modal-close:hover { color: var(--sms-danger); transform: rotate(90deg); }
-
-  .modal-body { padding: 24px; }
-  .modal-body .sms-field { margin-bottom: 16px; }
-  .modal-body .sms-field label {
-    font-weight: 600;
-    font-size: 0.85rem;
-    color: var(--sms-text);
-    margin-bottom: 5px;
-    display: block;
-  }
-  .modal-body .sms-field label .badge-required {
-    background: var(--sms-danger);
-    color: #fff;
-    font-size: 0.6rem;
-    padding: 1px 8px;
-    border-radius: 20px;
-    margin-left: 4px;
-  }
-  .modal-body .form-control {
-    border: 1.5px solid var(--sms-border);
-    border-radius: 10px;
-    padding: 8px 12px;
-    font-size: 0.9rem;
-    color: var(--sms-text);
-    width: 100%;
-    transition: var(--sms-transition);
-  }
-  .modal-body .form-control:focus {
-    border-color: var(--sms-primary);
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(52, 82, 225, 0.1);
-  }
-  .modal-body textarea.form-control {
-    min-height: 70px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.82rem;
-    resize: vertical;
-  }
-  .modal-body .form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-  }
-  .modal-body .form-row .sms-field { margin-bottom: 0; }
-
-  .modal-footer {
-    padding: 16px 24px;
-    border-top: 1px solid var(--sms-border);
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-    background: #FAFAFD;
-    border-radius: 0 0 var(--sms-radius) var(--sms-radius);
-  }
-  .modal-footer .btn {
-    padding: 8px 20px;
-    border-radius: 8px;
-    font-weight: 600;
-  }
-  .modal-footer .btn-secondary { background: #F1F3F8; color: var(--sms-muted); border: none; }
-  .modal-footer .btn-secondary:hover { background: #E4E7F0; }
-  .modal-footer .btn-success { background: var(--sms-success); color: #fff; }
-  .modal-footer .btn-success:hover { background: #13895D; }
-
-  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes slideUp { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-
-  /* Toast */
-  #smsToastArea {
-    position: fixed;
-    top: 0.6rem;
-    right: 0.6rem;
-    z-index: 9999;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-width: 350px;
-    width: 100%;
-  }
-  .sms-toast {
-    background: #fff;
-    border-radius: 12px;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.15);
-    padding: 12px 16px;
-    border-left: 5px solid var(--sms-primary);
-    animation: slideIn 0.3s ease;
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-  }
-  .sms-toast.success { border-left-color: var(--sms-success); }
-  .sms-toast.danger  { border-left-color: var(--sms-danger); }
-  .sms-toast.warning { border-left-color: var(--sms-warning); }
-  .sms-toast.info    { border-left-color: var(--sms-info); }
-  .sms-toast .icon { font-size: 1.2rem; flex-shrink: 0; margin-top: 2px; }
-  .sms-toast .content { flex: 1; font-size: 0.88rem; color: var(--sms-text); }
-  .sms-toast .close-btn {
-    background: none; border: none; font-size: 1.2rem;
-    color: var(--sms-muted); cursor: pointer; padding: 0 4px;
-  }
-  .sms-toast .close-btn:hover { color: var(--sms-text); }
-
-  @keyframes slideIn {
-    from { opacity: 0; transform: translateX(30px); }
-    to   { opacity: 1; transform: translateX(0); }
-  }
-
-  .spinner-sm {
-    display: inline-block;
-    width: 18px;
-    height: 18px;
-    border: 2px solid rgba(52,82,225,0.2);
-    border-top-color: var(--sms-primary);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .footer-info {
-    padding: 12px 20px;
-    background: #FAFAFD;
-    border-top: 1px solid var(--sms-border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
-    font-size: 0.8rem;
-    color: var(--sms-muted);
-  }
-  .footer-info .total { font-weight: 700; color: var(--sms-primary); }
-
-  .text-truncate-cell {
-    max-width: 220px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  @media (max-width: 768px) {
-    .table-card .card-header { flex-direction: column; align-items: stretch; gap: 10px; }
-    .filter-bar { flex-wrap: wrap; }
-    .filter-bar select { flex: 1; min-width: 120px; }
-    .table-card table { font-size: 0.75rem; min-width: 900px; }
-    .table-card table th,
-    .table-card table td { padding: 8px 10px; }
-    .btn-group .btn { padding: 3px 7px; font-size: 0.7rem; }
-    .modal-box { width: 95%; margin: 10px; }
-    .modal-body .form-row { grid-template-columns: 1fr; }
-  }
+  .prog-lista .footer-info .total { font-weight: 700; color: var(--primary); }
+  .text-truncate-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
   /* Mensaje del error de la última ejecución */
   .prog-error {
-    margin-top: 4px; max-width: 260px; font-size: 0.72rem; color: var(--danger, #c0392b);
+    margin-top: 4px; max-width: 260px; font-size: 0.72rem; color: var(--danger);
     white-space: normal; word-break: break-word;
   }
+  #editModal .modal-box { max-width: 620px; }
+  #editModal .sms-field { margin-bottom: 14px; }
+  #editModal .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  #editModal .form-row .sms-field { margin-bottom: 0; }
+  @media (max-width: 768px) { #editModal .form-row { grid-template-columns: 1fr; } }
 </style>
-{% endblock %}
-
-{% block content %}
-
-<div id="smsToastArea"></div>
 
 <!-- MODAL DE EDICIÓN -->
 <div class="modal-overlay" id="editModal">
@@ -447,9 +74,9 @@
       </div>
 
       <div class="sms-field">
-        <label>Constructor de mensaje <span class="badge" style="background:#E2E4EE;color:var(--text-secondary);font-size:0.7rem;">Opcional</span></label>
+        <label>Plantilla SMS guardada <span class="badge badge-secondary">Opcional</span></label>
         <select class="form-control" id="editMensajeGuardado">
-          <option value="">-- Usar una plantilla SMS guardada --</option>
+          <option value="">-- Elegir por momento del cliente --</option>
         </select>
       </div>
 
@@ -497,10 +124,10 @@
 </div>
 
 <!-- TABLA -->
-<div class="sms-container">
-  <div class="table-card">
+<div class="prog-lista">
+  <div class="card">
     <div class="card-header">
-      <h3><i class="fas fa-clock-history"></i> Todas las programaciones</h3>
+      <h3><i class="fas fa-list"></i> Programaciones creadas</h3>
       <div class="filter-bar">
         <select id="filtroEstadoProg">
           <option value="">Todos los estados</option>
@@ -519,9 +146,6 @@
         <button class="btn btn-outline-secondary btn-sm" id="btnRefrescarProg">
           <i class="fas fa-sync-alt"></i> Refrescar
         </button>
-        <a href="/config-sms" class="btn btn-primary btn-sm">
-          <i class="fas fa-plus"></i> Nueva
-        </a>
       </div>
     </div>
     <div class="card-body" id="progListaContainer">
@@ -539,9 +163,6 @@
   </div>
 </div>
 
-{% endblock %}
-
-{% block extra_js %}
 <script>
 (function() {
   'use strict';
@@ -583,12 +204,12 @@
   let mensajesGuardados = [];
   async function cargarMensajesGuardados() {
     try {
-      const resp = await fetch('/api/sms/mensajes-operacion');
+      const resp = await fetch('/api/sms/mensajes?activos=1');
       const data = await resp.json();
       mensajesGuardados = data.items || [];
       document.getElementById('editMensajeGuardado').innerHTML =
-        '<option value="">-- Usar una plantilla SMS guardada --</option>' +
-        mensajesGuardados.map(m => `<option value="${m.id}">${esc(m.operador || '')} · ${esc(m.tipo || '')} · ${esc((m.mensaje || '').substring(0, 60))}</option>`).join('');
+        '<option value="">-- Elegir por momento del cliente --</option>' +
+        mensajesGuardados.map(m => `<option value="${m.id}">${esc(m.momento || 'Sin momento')} · ${esc((m.mensaje || '').substring(0, 60))}</option>`).join('');
     } catch (e) { /* sin plantillas: se escribe el mensaje a mano */ }
   }
   document.getElementById('editMensajeGuardado').addEventListener('change', function() {
@@ -669,7 +290,6 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
-      console.log('Response status:', resp.status);
       const result = await resp.json();
 
       if (result.success) {
@@ -735,10 +355,7 @@
         container.innerHTML = `
           <div class="empty-state">
             <i class="fas fa-inbox"></i>
-            <p>No hay programaciones registradas</p>
-            <a href="/config-sms" class="btn btn-primary btn-sm">
-              <i class="fas fa-plus"></i> Crear programación
-            </a>
+            <p>No hay programaciones. Crea la primera con el formulario de arriba.</p>
           </div>
         `;
         document.getElementById('footerInfo').style.display = 'none';
@@ -750,7 +367,7 @@
       document.getElementById('updateTime').textContent = new Date().toLocaleString('es-CO');
 
       let html = `
-        <table>
+        <table class="table">
           <thead>
             <tr>
               <th>ID</th>
@@ -762,6 +379,7 @@
               <th>Fecha Fin</th>
               <th>Últ. Ejecución</th>
               <th>Dest.</th>
+              <th>Enviados</th>
               <th>Estado</th>
               <th style="text-align:center;">Acciones</th>
             </tr>
@@ -777,7 +395,7 @@
         const estadoMap = {
           'pendiente':  '<span class="badge badge-warning"><i class="fas fa-hourglass-half"></i> Pendiente</span>',
           'enviado':    '<span class="badge badge-success"><i class="fas fa-check-circle"></i> Enviado</span>',
-          'completado': '<span class="badge badge-success" style="background:#17A673;color:#fff;"><i class="fas fa-check-double"></i> Completado</span>',
+          'completado': '<span class="badge badge-success"><i class="fas fa-check-double"></i> Completado</span>',
           'fallido':    '<span class="badge badge-danger"><i class="fas fa-times-circle"></i> Fallido</span>',
           'error':      '<span class="badge badge-danger"><i class="fas fa-exclamation-triangle"></i> Error</span>',
           'cancelado':  '<span class="badge badge-secondary"><i class="fas fa-ban"></i> Cancelado</span>'
@@ -791,15 +409,16 @@
 
         html += `
           <tr>
-            <td><code class="text-primary">#${prog.id}</code></td>
+            <td><code class="prog-id">#${prog.id}</code></td>
             <td><strong class="text-truncate-cell" title="${esc(prog.campana)}">${esc(prog.campana) || '—'}</strong></td>
             <td>${esc(prog.usuario) || '—'}</td>
             <td>${tipoBadge}</td>
             <td>${fmtFecha(prog.fecha_programada)}</td>
             <td>${esc(prog.hora_inicio) || '—'}</td>
             <td>${esc(prog.fecha_fin) || '—'}</td>
-            <td>${fmtFecha(prog.fecha_ejecucion)}</td>
+            <td>${fmtFecha(prog.fecha_ejecucion ? prog.fecha_ejecucion + 'Z' : null)}</td>
             <td>${prog.total_destinatarios || 0}</td>
+            <td>${prog.ultimo_enviados ?? '—'}</td>
             <td>${estadoHtml}</td>
             <td style="text-align:center;">
               <div class="btn-group" role="group" style="display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:center;">
@@ -886,9 +505,10 @@
   document.getElementById('btnRefrescarProg')?.addEventListener('click', cargarProgramaciones);
 
   // ========== CARGAR AL INICIAR ==========
+  // El formulario de arriba la recarga después de programar.
+  window.cargarProgramacionesSms = cargarProgramaciones;
   cargarProgramaciones();
   cargarMensajesGuardados();
 
 })();
 </script>
-{% endblock %}

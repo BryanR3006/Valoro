@@ -14,22 +14,47 @@ def _ahora_colombia():
     return datetime.now(_COLOMBIA_TZ).replace(tzinfo=None)
 
 
-def _ensure_programacion_sms_columns():
-    """Agrega columnas nuevas a programaciones_sms si la tabla ya existía."""
+def _agregar_columnas(tabla, columnas):
+    """
+    Agrega a una tabla que ya existía las columnas que le falten
+    ({nombre: tipo SQL}). Devuelve los nombres de las que agregó.
+    """
     inspector = inspect(db.engine)
-    if "programaciones_sms" not in inspector.get_table_names():
-        return
-
-    existing = {col["name"] for col in inspector.get_columns("programaciones_sms")}
-    migrations = {
-        "filas_excel": "ALTER TABLE programaciones_sms ADD COLUMN filas_excel TEXT",
-        "link_whatsapp": "ALTER TABLE programaciones_sms ADD COLUMN link_whatsapp TEXT",
-        "ultimo_error": "ALTER TABLE programaciones_sms ADD COLUMN ultimo_error TEXT",
-    }
-    for column, ddl in migrations.items():
-        if column not in existing:
-            db.session.execute(text(ddl))
+    if tabla not in inspector.get_table_names():
+        return []
+    existentes = {col["name"] for col in inspector.get_columns(tabla)}
+    agregadas = []
+    for columna, tipo in columnas.items():
+        if columna not in existentes:
+            db.session.execute(text(f'ALTER TABLE "{tabla}" ADD COLUMN {columna} {tipo}'))
+            agregadas.append(columna)
     db.session.commit()
+    return agregadas
+
+
+def _ensure_programacion_sms_columns():
+    """Columnas nuevas de programaciones_sms."""
+    _agregar_columnas("programaciones_sms", {
+        "filas_excel": "TEXT",
+        "link_whatsapp": "TEXT",
+        "ultimo_error": "TEXT",
+        "ultimo_enviados": "INTEGER",
+    })
+
+
+def _ensure_momento_columns():
+    """
+    Momento del cliente en las plantillas SMS y email (reemplaza operador y
+    categoría). Las plantillas SMS viejas quedan con su categoría como momento.
+    """
+    if "Momento" in _agregar_columnas("Mensajes_", {"Momento": "TEXT"}):
+        columnas = {col["name"] for col in inspect(db.engine).get_columns("Mensajes_")}
+        if "Categoria" in columnas:
+            db.session.execute(text(
+                'UPDATE "Mensajes_" SET Momento = Categoria WHERE Categoria IS NOT NULL AND Categoria != \'\''))
+            db.session.commit()
+    _agregar_columnas("plantillas_email", {"momento": "TEXT"})
+
 
 def _avisar_columnas_faltantes():
     """
@@ -57,6 +82,7 @@ def init_db(app):
     with app.app_context():
         db.create_all()
         _ensure_programacion_sms_columns()
+        _ensure_momento_columns()
         _avisar_columnas_faltantes()
 
 
@@ -70,6 +96,8 @@ class PlantillaEmail(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     nombre = db.Column(db.String(120), nullable=False, unique=True)
+    # Momento del cliente para el que es la plantilla (ej. "Mora corta").
+    momento = db.Column(db.String(100), nullable=True)
     asunto = db.Column(db.String(255), nullable=False, default='')
     html = db.Column(db.Text, nullable=False)
     activa = db.Column(db.Boolean, default=True, nullable=False)
@@ -85,6 +113,7 @@ class PlantillaEmail(db.Model):
         return {
             "id": self.id,
             "nombre": self.nombre,
+            "momento": self.momento or "",
             "asunto": self.asunto or "",
             "html": self.html,
             "activa": bool(self.activa),
@@ -118,6 +147,8 @@ class ProgramacionSms(db.Model):
     link_whatsapp = db.Column(db.Text, nullable=True)
     # Mensaje del último error de ejecución (estado 'error'), visible en la lista.
     ultimo_error = db.Column(db.Text, nullable=True)
+    # SMS enviados en la última ejecución (lo muestra Inicio).
+    ultimo_enviados = db.Column(db.Integer, nullable=True)
     fecha_ejecucion = db.Column(
         db.DateTime,
         nullable=True
@@ -130,26 +161,26 @@ class ProgramacionSms(db.Model):
     )
     
 class MensajeOperacion(db.Model):
+    """
+    Plantilla SMS del constructor de mensajes, asignada a un momento del
+    cliente (ej. "Mora corta"). La tabla vieja también tiene Operador, Tipo,
+    Categoria y Operadores: ya no se usan.
+    """
     __tablename__ = 'Mensajes_'
-    
+
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    Operador = db.Column(db.String(100), nullable=False)
+    Momento = db.Column(db.String(100))
     Mensaje = db.Column(db.Text, nullable=False)
-    Tipo = db.Column(db.String(50))
     Estado = db.Column(db.Integer, default=1)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
-    Categoria = db.Column(db.String(100)) 
-    Operadores = db.Column(db.Text)
+    # Columna vieja: en las bases que ya existían es NOT NULL, por eso va vacía.
+    Operador = db.Column(db.String(100), nullable=False, default='')
+
     def to_dict(self):
         return {
             'id': self.id,
-            'operador': self.Operador,
+            'momento': self.Momento or '',
             'mensaje': self.Mensaje,
-            'tipo': self.Tipo,
             'estado': self.Estado,
             'fecha_creacion': self.fecha_creacion.isoformat() if self.fecha_creacion else None,
-            'operadores': self.Operadores,
-            'categoria': self.Categoria,
-
         }
-

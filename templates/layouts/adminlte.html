@@ -25,10 +25,8 @@
     <!-- SIDEBAR -->
     <aside class="sidebar" id="sidebar">
         <a href="/" class="sidebar-logo">
-            {# Logo: static/img/logo-valoro.png. Si el archivo no está, se ve el nombre. #}
-            <img src="{{ url_for('static', filename='img/logo-valoro.png') }}" alt="{{ app_nombre }}" class="logo-img"
-                 onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
-            <div class="logo-text" style="display:none;">{{ app_nombre }}</div>
+            {# Logo: static/img/logo-valoro.png #}
+            <img src="{{ url_for('static', filename='img/logo-valoro.png') }}" alt="{{ app_nombre }}" class="logo-img">
         </a>
         
         {# Menú: cada grupo se despliega al hacer clic en su nombre. El grupo de la
@@ -38,12 +36,13 @@
         {% set menu = [
             {'id': 'sms', 'titulo': 'SMS', 'icono': 'fa-sms', 'items': [
                 {'url': '/config-sms', 'texto': 'Enviar SMS', 'icono': 'fa-paper-plane', 'activo': ep == 'config_sms'},
-                {'url': '/api/sms/ver_programaciones', 'texto': 'Programaciones SMS', 'icono': 'fa-calendar-alt', 'activo': ep == 'sms_programaciones_pagina'},
+                {'url': '/sms/programaciones', 'texto': 'Programaciones SMS', 'icono': 'fa-calendar-alt', 'activo': ep == 'sms_programaciones_pagina'},
                 {'url': '/config-mensajes', 'texto': 'Plantillas SMS', 'icono': 'fa-file-alt', 'activo': ep == 'config_mensajes'},
                 {'url': '/dashboards', 'texto': 'Dashboard SMS', 'icono': 'fa-chart-pie', 'activo': ep == 'dashboards_page'},
             ]},
             {'id': 'email', 'titulo': 'Email', 'icono': 'fa-envelope', 'items': [
                 {'url': '/config-email', 'texto': 'Enviar Email', 'icono': 'fa-paper-plane', 'activo': ep == 'config_email'},
+                {'url': '/email/programaciones', 'texto': 'Programaciones email', 'icono': 'fa-calendar-alt', 'activo': ep == 'email_programaciones_pagina'},
                 {'url': '/email/plantillas', 'texto': 'Plantillas email', 'icono': 'fa-file-alt', 'activo': ep == 'email_plantillas_pagina'},
             ]},
             {'id': 'config', 'titulo': 'Configuración', 'icono': 'fa-cog', 'items': [

@@ -1,28 +1,16 @@
 {% extends "layouts/adminlte.html" %}
 
-{% block title %}Campañas SMS{% endblock %}
+{# Una sola pantalla para dos páginas: modo "enviar" (Enviar SMS) y modo
+   "programar" (Programaciones SMS: formulario + lista). Lo que es de un solo
+   modo lleva la clase solo-enviar / solo-programar (valoro.css lo oculta). #}
+{% set programar = modo == 'programar' %}
+{% block title %}{{ 'Programaciones SMS' if programar else 'Enviar SMS' }}{% endblock %}
 
-{% block page_title %}
-<div class="d-flex align-items-center">
-  <div class="mr-3" style="font-size:2rem; color: var(--primary);">
-    <i class="fas fa-comment-sms"></i>
-  </div>
-  <div>
-    <h1 class="m-0" style="font-weight:700;">Campañas SMS</h1>
-    <small class="text-muted">Destinatarios desde BigQuery · Envío vía Infobip</small>
-  </div>
-</div>
-{% endblock %}
-
-{% block breadcrumb %}
-<li class="breadcrumb-item"><a href="/">Inicio</a></li>
-<li class="breadcrumb-item active">SMS</li>
-{% endblock %}
+{% block page_title %}<h1>{{ 'Programaciones SMS' if programar else 'Enviar SMS' }}</h1>{% endblock %}
+{% block page_subtitle %}{% if programar %}Envíos simples (una vez) o recurrentes (todos los días). Abajo están las programaciones creadas.{% else %}Base desde BigQuery o Excel · Envío inmediato vía Infobip{% endif %}{% endblock %}
 
 {% block extra_css %}
 <style>
-  .content-wrapper { background: var(--bg-body); }
-
   .sms-container { display: grid; grid-template-columns: 1fr 380px; gap: 24px; align-items: start; }
   @media (max-width: 1199px) { .sms-container { grid-template-columns: 1fr; } }
 
@@ -34,17 +22,6 @@
   .sms-card:hover { box-shadow: var(--shadow-lg); }
   .sms-card-body { padding: 24px 26px 26px; }
 
-  .sms-tabs {
-    display: flex; gap: 2px; background: var(--border-light);
-    border-radius: 10px; padding: 4px; margin-bottom: 22px;
-  }
-  .sms-tabs .tab {
-    flex: 1; padding: 8px 14px; border: none; border-radius: 8px;
-    background: transparent; font-weight: 600; font-size: 0.82rem;
-    color: var(--text-secondary); cursor: pointer; transition: var(--transition); text-align: center;
-  }
-  .sms-tabs .tab:hover { color: var(--text-primary); background: rgba(255,255,255,0.5); }
-  .sms-tabs .tab.active { background: var(--bg-card); color: var(--primary); box-shadow: var(--shadow-sm); }
   /* Origen de la base: consulta o Excel (issue #39) */
   .sms-origen {
     display: inline-flex; gap: 2px; background: var(--border-light);
@@ -57,8 +34,6 @@
   .sms-origen button.active { background: var(--bg-card); color: var(--primary); box-shadow: var(--shadow-sm); }
   .sms-excel-resumen { font-size: 0.78rem; color: var(--text-secondary); margin-top: 8px; line-height: 1.5; }
   .sms-excel-resumen code { font-size: 0.72rem; }
-  .sms-tab-panel { display: none; animation: fadeIn 0.3s ease; }
-  .sms-tab-panel.active { display: block; }
 
   .sms-field { margin-bottom: 18px; }
   .sms-field label {
@@ -93,26 +68,8 @@
     margin-bottom: 10px; display: flex; align-items: center; gap: 8px;
   }
 
-  .sms-schedule-row {
-    display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;
-    background: var(--bg-code); border: 1.5px dashed var(--border);
-    border-radius: 12px; padding: 16px 18px; margin-bottom: 20px;
-  }
-  .sms-schedule-row .form-group { margin-bottom: 0; flex: 1; min-width: 180px; }
-  .sms-schedule-row .form-group label {
-    font-weight: 600; font-size: 0.78rem; color: var(--text-secondary);
-    text-transform: uppercase; letter-spacing: 0.04em;
-  }
-  .sms-schedule-row .btn-schedule {
-    background: transparent; border: 1.5px solid var(--border);
-    border-radius: 10px; padding: 8px 18px; font-weight: 600;
-    font-size: 0.82rem; color: var(--text-secondary); transition: var(--transition);
-    cursor: pointer; white-space: nowrap;
-  }
-  .sms-schedule-row .btn-schedule:hover {
-    border-color: var(--primary); color: var(--primary);
-    background: var(--primary-light);
-  }
+  .sms-cuando { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .sms-cuando .sms-field { margin-bottom: 0; }
 
   .sms-flag {
     display: flex; gap: 10px; align-items: flex-start;
@@ -129,24 +86,24 @@
   .sms-side { position: sticky; top: 20px; display: flex; flex-direction: column; gap: 16px; }
 
   .sms-phone {
-    background: linear-gradient(180deg, #1B1F3B, #262B52);
+    background: linear-gradient(160deg, var(--valoro-superficie-3), var(--valoro-fondo));
     border-radius: 28px; padding: 18px 16px 22px;
     box-shadow: var(--shadow-xl);
   }
   .sms-phone .notch { width: 80px; height: 6px; background: rgba(255,255,255,0.2); border-radius: 4px; margin: 0 auto 14px; }
   .sms-phone .screen {
-    background: #F3F4F9; border-radius: 16px; min-height: 200px;
+    background: #f4f8f1; border-radius: 16px; min-height: 200px;
     padding: 16px 14px; display: flex; flex-direction: column; justify-content: flex-end; gap: 6px;
   }
   .sms-phone .bubble {
-    background: linear-gradient(135deg, var(--primary), var(--accent));
+    background: linear-gradient(135deg, var(--valoro-verde), #256418);
     color: #fff; padding: 10px 14px; border-radius: 16px 16px 4px 16px;
     font-size: 0.82rem; line-height: 1.4; max-width: 92%; align-self: flex-end;
     white-space: pre-wrap; word-break: break-word;
     box-shadow: 0 4px 12px rgba(47,125,30,0.25); transition: var(--transition);
   }
   .sms-phone .bubble.is-placeholder {
-    background: #E2E4EE; color: #8A90A6; font-style: italic;
+    background: #e3ecdd; color: var(--text-secondary); font-style: italic;
     align-self: center; text-align: center; border-radius: 16px;
   }
   .sms-phone .meta {
@@ -207,99 +164,8 @@
     border-radius: 50%; animation: spin 0.7s linear infinite;
   }
 
-  .switch-sm {
-    position: relative; display: inline-block; width: 44px; height: 24px;
-  }
-  .switch-sm input { opacity: 0; width: 0; height: 0; }
-  .slider-sm {
-    position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-    background-color: #ccc; transition: 0.3s; border-radius: 24px;
-  }
-  .slider-sm:before {
-    position: absolute; content: ""; height: 18px; width: 18px;
-    left: 3px; bottom: 3px; background-color: white; transition: 0.3s; border-radius: 50%;
-  }
-  input:checked + .slider-sm { background-color: var(--primary); }
-  input:checked + .slider-sm:before { transform: translateX(20px); }
-
-  .multi-select-container { position: relative; width: 100%; }
-  .multi-select-trigger {
-    border: 1.5px solid var(--border); border-radius: 10px;
-    padding: 6px 10px; font-size: 0.9rem; cursor: pointer; background: var(--bg-card);
-    min-height: 30px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
-    transition: var(--transition);
-  }
-  .multi-select-trigger:hover { border-color: var(--primary); }
-  .multi-select-trigger:focus-within { border-color: var(--primary); box-shadow: 0 0 0 4px rgba(47,125,30,0.12); }
-  .multi-select-chip {
-    background: var(--primary-light); color: var(--primary);
-    border: 1px solid #C7D2FE; padding: 2px 8px; border-radius: 50px;
-    font-size: 0.75rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;
-  }
-  .multi-select-chip .remove-chip { cursor: pointer; font-size: 0.9rem; color: var(--primary); line-height: 1; }
-  .multi-select-chip .remove-chip:hover { color: var(--danger); }
-  .multi-select-placeholder { color: #94a3b8; font-size: 0.85rem; }
-  .multi-select-dropdown {
-    position: absolute; top: 100%; left: 0; right: 0; background: var(--bg-card);
-    border: 1px solid var(--border); border-radius: 10px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.1); z-index: 100; max-height: 260px;
-    display: none; margin-top: 4px; overflow: hidden; flex-direction: column;
-  }
-  .multi-select-dropdown.open { display: flex; }
-  .multi-select-search { padding: 8px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-  .multi-select-search input {
-    width: 100%; border: 1px solid var(--border); border-radius: 6px;
-    padding: 6px 10px; font-size: 0.82rem; outline: none; transition: border 0.2s;
-  }
-  .multi-select-search input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(47,125,30,0.15); }
-  .multi-select-options { flex: 1; overflow-y: auto; padding: 4px 0; }
-  .multi-select-options label {
-    display: flex; align-items: center; gap: 8px; padding: 6px 12px;
-    cursor: pointer; font-size: 0.82rem; font-weight: 500; transition: background 0.15s;
-  }
-  .multi-select-options label:hover { background: #f1f5f9; }
-  .multi-select-options input[type="checkbox"] { accent-color: var(--primary); }
-  .multi-select-actions { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); flex-shrink: 0; }
-  .multi-select-actions button {
-    flex: 1; font-size: 0.72rem; padding: 5px 10px; border-radius: 6px;
-    border: 1px solid var(--border); background: var(--bg-card); cursor: pointer; font-weight: 600;
-  }
-  .multi-select-actions .btn-aplicar { background: var(--primary); color: #fff; border-color: var(--primary); }
-
-  /* Estilos para programaciones */
-  .scheduled-card {
-    background: var(--bg-card); border: 1px solid var(--border);
-    border-radius: var(--radius-sm); padding: 16px 18px;
-    margin-bottom: 12px; transition: var(--transition);
-  }
-  .scheduled-card:hover { border-color: var(--primary); box-shadow: var(--shadow); }
-  .scheduled-card .header {
-    display: flex; justify-content: space-between; align-items: flex-start;
-    margin-bottom: 10px;
-  }
-  .scheduled-card .title { font-weight: 700; font-size: 0.95rem; color: var(--text-primary); }
-  .scheduled-card .meta { font-size: 0.78rem; color: var(--text-secondary); }
-  .scheduled-card .preview {
-    background: var(--bg-code); border-radius: 8px;
-    padding: 10px 14px; font-size: 0.82rem;
-    margin: 8px 0; border-left: 3px solid var(--primary);
-  }
-  .scheduled-card .actions {
-    display: flex; gap: 8px; margin-top: 10px;
-    flex-wrap: wrap;
-  }
-  .badge-scheduled {
-    display: inline-block; padding: 3px 10px;
-    border-radius: 20px; font-size: 0.65rem; font-weight: 600;
-  }
-  .badge-scheduled.pendiente { background: var(--warning-bg); color: var(--warning); }
-  .badge-scheduled.enviado { background: var(--success-bg); color: var(--success); }
-  .badge-scheduled.fallido { background: var(--danger-bg); color: var(--danger); }
-  .badge-scheduled.procesando { background: var(--info-bg); color: var(--info); }
-
   @media (max-width: 768px) {
     .sms-card-body { padding: 16px; }
-    .sms-schedule-row { flex-direction: column; align-items: stretch; }
     .sms-container { grid-template-columns: 1fr; }
   }
 </style>
@@ -309,57 +175,37 @@
 
 <div id="smsToastArea"></div>
 
-<div class="sms-container">
+<div class="sms-container modo-{{ modo }}">
 
   <div class="sms-card">
     <div class="sms-card-body">
 
-      <div class="sms-tabs" id="smsTabs">
-        <button class="tab active" data-tab="send"><i class="fas fa-paper-plane"></i> Enviar</button>
-        <button class="tab" data-tab="scheduled"><i class="fas fa-clock"></i> Programaciones</button>
-      </div>
+      <div id="panel-send">
 
-      <!-- PANEL ENVIAR -->
-      <div class="sms-tab-panel active" id="panel-send">
-
-        <!-- CONSTRUCTOR DE MENSAJE -->
+        <!-- CONSTRUCTOR DE MENSAJE: plantillas SMS por momento del cliente -->
         <div class="sms-auto-section">
           <div class="section-title">
-            <i class="fas fa-puzzle-piece"></i> Constructor de Mensaje
-            <span class="badge" style="background:#E2E4EE;color:var(--text-secondary);font-size:0.7rem;">Opcional</span>
+            <i class="fas fa-puzzle-piece"></i> Constructor de mensaje
+            <span class="badge badge-secondary">Opcional</span>
+            <a href="/config-mensajes" style="margin-left:auto;font-size:0.75rem;font-weight:600;">Plantillas SMS <i class="fas fa-arrow-right"></i></a>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
-            <div style="flex:1;min-width:150px;">
-              <label style="font-size:0.72rem;font-weight:600;color:var(--text-secondary);">Operador(es)</label>
-              <div class="multi-select-container" id="msOperadorContainer">
-                <div class="multi-select-trigger" id="msOperadorTrigger">
-                  <span class="multi-select-placeholder">-- Selecciona --</span>
-                </div>
-                <div class="multi-select-dropdown" id="msOperadorDropdown"></div>
-              </div>
-            </div>
-            <div style="flex:1;min-width:130px;">
-              <label style="font-size:0.72rem;font-weight:600;color:var(--text-secondary);">Categoría</label>
-              <select id="maFiltroCategoria" class="form-control form-control-sm">
-                <option value="">-- Categoría --</option>
+            <div style="flex:1;min-width:180px;">
+              <label for="maMomento" style="font-size:0.72rem;font-weight:600;color:var(--text-secondary);">Momento del cliente</label>
+              <select id="maMomento" class="form-control form-control-sm">
+                <option value="">-- Todos --</option>
               </select>
             </div>
-            <div style="flex:1;min-width:130px;">
-              <label style="font-size:0.72rem;font-weight:600;color:var(--text-secondary);">Tipo</label>
-              <select id="maFiltroIntensidad" class="form-control form-control-sm">
-                <option value="">Tipo</option>
-              </select>
-            </div>
-            <div style="flex:2;min-width:200px;">
-              <label style="font-size:0.72rem;font-weight:600;color:var(--text-secondary);">Mensaje</label>
+            <div style="flex:2;min-width:240px;">
+              <label for="maMensajeSelect" style="font-size:0.72rem;font-weight:600;color:var(--text-secondary);">Mensaje</label>
               <select id="maMensajeSelect" class="form-control form-control-sm">
                 <option value="">-- Selecciona mensaje --</option>
               </select>
             </div>
           </div>
-          <div style="margin-top:6px;font-size:0.7rem;color:var(--text-secondary);">
-            <i class="fas fa-info-circle"></i> 
-            Selecciona combinación de Operador(es), Categoría y/o Tipo para cargar una plantilla.
+          <div style="margin-top:6px;font-size:0.72rem;color:var(--text-secondary);">
+            <i class="fas fa-info-circle"></i>
+            Elige el momento del cliente (mora corta, acuerdo de pago…) y una plantilla: se copia abajo y puedes ajustarla.
           </div>
         </div>
 
@@ -437,63 +283,46 @@
           </span>
         </div>
 
-        <!-- PROGRAMAR SIMPLE -->
-        <div class="sms-schedule-row">
-          <div class="form-group">
-              <label for="fechaProgramada"><i class="far fa-calendar-alt"></i> Fecha</label>
+        <!-- CUÁNDO (solo Programaciones SMS) -->
+        <div class="sms-auto-section solo-programar">
+          <div class="section-title"><i class="far fa-calendar-alt"></i> Cuándo se envía</div>
+          <div class="sms-cuando">
+            <div class="sms-field">
+              <label for="tipoProgramacion">Tipo</label>
+              <select id="tipoProgramacion" class="form-control">
+                <option value="simple">Simple (una vez)</option>
+                <option value="recurrente">Recurrente (todos los días)</option>
+              </select>
+            </div>
+            <div class="sms-field solo-simple">
+              <label for="fechaProgramada">Fecha</label>
               <input id="fechaProgramada" type="date" class="form-control">
-          </div>
-          <div class="form-group">
-              <label for="horaProgramada"><i class="far fa-clock"></i> Hora</label>
+            </div>
+            <div class="sms-field solo-simple">
+              <label for="horaProgramada">Hora</label>
               <input id="horaProgramada" type="time" class="form-control" value="08:00">
-          </div>
-          <button id="scheduleBtn" class="btn-schedule"><i class="fas fa-clock"></i>  Programar envío</button>
-        </div>
-
-        <!-- PROGRAMACIÓN RECURRENTE -->
-        <div class="sms-auto-section" style="margin-bottom:16px;">
-          <div class="section-title">
-            <i class="fas fa-sync-alt"></i> Programación Recurrente
-            <label class="switch-sm" style="margin-left:auto;">
-              <input type="checkbox" id="esRecurrente">
-              <span class="slider-sm"></span>
-            </label>
-          </div>
-          
-          <div id="recurrenciaOpciones" style="display:none;">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
-              <div class="sms-field" style="margin-bottom:0;">
-                <label style="font-size:0.72rem;">⏰ Hora de envío</label>
-                <input type="time" id="horaRecurrente" class="form-control form-control-sm" value="08:00">
-              </div>
-              <div class="sms-field" style="margin-bottom:0;">
-                <label style="font-size:0.72rem;">📅 Fecha fin (opcional)</label>
-                <input type="date" id="fechaLimite" class="form-control form-control-sm">
-              </div>
             </div>
-            <div style="font-size:0.7rem;color:var(--text-secondary);margin-top:8px;">
-              <i class="fas fa-info-circle"></i> Se ejecutará todos los días a la hora indicada hasta la fecha fin.
+            <div class="sms-field solo-recurrente" style="display:none;">
+              <label for="horaRecurrente">Hora de envío</label>
+              <input id="horaRecurrente" type="time" class="form-control" value="08:00">
+            </div>
+            <div class="sms-field solo-recurrente" style="display:none;">
+              <label for="fechaLimite">Fecha fin (opcional)</label>
+              <input id="fechaLimite" type="date" class="form-control">
             </div>
           </div>
+          <div class="sms-help"><span><i class="fas fa-info-circle"></i> Recurrente: sale todos los días a esa hora hasta la fecha fin. Con Excel solo se puede programar una vez.</span></div>
         </div>
 
         <!-- BOTONES -->
         <div class="sms-actions">
           <button id="previewBtn" class="btn btn-outline-primary"><i class="fas fa-eye"></i> Probar consulta</button>
-          <button id="sendBtn" class="btn btn-success" disabled><i class="fas fa-paper-plane"></i> Enviar SMS</button>
-          <button id="scheduleRecurrentBtn" class="btn btn-primary" style="display:none;"><i class="fas fa-sync-alt"></i> Programar recurrente</button>
+          <button id="sendBtn" class="btn btn-success solo-enviar" disabled><i class="fas fa-paper-plane"></i> Enviar SMS</button>
+          <button id="scheduleBtn" class="btn btn-primary solo-programar"><i class="fas fa-calendar-check"></i> Programar</button>
           <button id="clearBtn" class="btn btn-outline-secondary"><i class="fas fa-undo"></i> Limpiar</button>
         </div>
 
         <div id="smsResult" class="sms-result"></div>
-      </div>
-
-      <!-- PANEL PROGRAMACIONES (NUEVO - Con vista previa y envío) -->
-      <div class="sms-tab-panel" id="panel-scheduled">
-        <div class="text-center py-4">
-          <p class="text-muted">Las programaciones SMS (simples y recurrentes) se ven, editan, cancelan y reintentan en su propia página.</p>
-          <a href="/api/sms/ver_programaciones" class="btn btn-primary"><i class="fas fa-list"></i> Ver programaciones SMS</a>
-        </div>
       </div>
 
     </div>
@@ -507,7 +336,7 @@
         <div id="phoneBubble" class="bubble is-placeholder">Escribe tu plantilla para ver una vista previa aquí…</div>
       </div>
       <div class="meta">
-        <span><i class="fas fa-sim-card"></i "> Previsualizacion · SMS</span>
+        <span><i class="fas fa-sim-card"></i> Vista previa · SMS</span>
         <span id="phoneMetaCount">0 caracteres</span>
       </div>
     </div>
@@ -549,6 +378,8 @@
   </div>
 
 </div>
+
+{% if programar %}{% include "sms/_lista_programaciones.html" %}{% endif %}
 {% endblock %}
 
 {% block extra_js %}
@@ -564,14 +395,12 @@
   const confirmarReenvioEl = document.getElementById('confirmarReenvio');
   const fechaProgramadaEl = document.getElementById('fechaProgramada');
   const horaProgramadaEl = document.getElementById('horaProgramada');
-  const esRecurrenteEl = document.getElementById('esRecurrente');
-  const recurrenciaOpciones = document.getElementById('recurrenciaOpciones');
+  const tipoProgramacionEl = document.getElementById('tipoProgramacion');
   const horaRecurrenteEl = document.getElementById('horaRecurrente');
   const fechaLimiteEl = document.getElementById('fechaLimite');
   const previewBtn = document.getElementById('previewBtn');
   const sendBtn = document.getElementById('sendBtn');
   const scheduleBtn = document.getElementById('scheduleBtn');
-  const scheduleRecurrentBtn = document.getElementById('scheduleRecurrentBtn');
   const clearBtn = document.getElementById('clearBtn');
   const resultEl = document.getElementById('smsResult');
   const phoneBubble = document.getElementById('phoneBubble');
@@ -584,20 +413,13 @@
   const statDuplicados = document.getElementById('statDuplicados');
   const statBlacklist = document.getElementById('statBlacklist');
   const statAEnviar = document.getElementById('statAEnviar');
-  const tabs = document.querySelectorAll('.sms-tabs .tab');
-  const panels = {
-    send: document.getElementById('panel-send'),
-    scheduled: document.getElementById('panel-scheduled')
-  };
 
   let previewData = null;
   let totalAEnviar = 0;
-  let msOperador = null;
 
   // ========== ORIGEN: CONSULTA O EXCEL (issue #39) ==========
   const excelFileEl = document.getElementById('excelFile');
   const excelResumenEl = document.getElementById('excelResumen');
-  const recurrenteSection = esRecurrenteEl.closest('.sms-auto-section');
   let origen = 'consulta';
   let excelId = null;
 
@@ -630,11 +452,9 @@
     document.getElementById('excelField').style.display = origen === 'excel' ? 'block' : 'none';
     document.getElementById('queryField').style.display = origen === 'excel' ? 'none' : 'block';
     // Con Excel solo se programa una vez: la base no cambia de un día a otro.
-    if (origen === 'excel' && esRecurrenteEl.checked) {
-      esRecurrenteEl.checked = false;
-      esRecurrenteEl.dispatchEvent(new Event('change'));
-    }
-    recurrenteSection.style.display = origen === 'excel' ? 'none' : '';
+    if (origen === 'excel') tipoProgramacionEl.value = 'simple';
+    tipoProgramacionEl.querySelector('option[value="recurrente"]').disabled = origen === 'excel';
+    mostrarCamposTipo();
     clearResult();
   }));
 
@@ -678,21 +498,16 @@
     return el.innerHTML;
   }
 
-  // Toggle recurrencia
-  esRecurrenteEl.addEventListener('change', function() {
-    if (this.checked) {
-      recurrenciaOpciones.style.display = 'block';
-      scheduleBtn.style.display = 'none';
-      scheduleRecurrentBtn.style.display = 'inline-flex';
-    } else {
-      recurrenciaOpciones.style.display = 'none';
-      scheduleBtn.style.display = 'inline-flex';
-      scheduleRecurrentBtn.style.display = 'none';
-    }
-  });
+  // Simple: fecha y hora. Recurrente: hora y fecha fin.
+  function mostrarCamposTipo() {
+    const recurrente = tipoProgramacionEl.value === 'recurrente';
+    document.querySelectorAll('.solo-simple').forEach(el => el.style.display = recurrente ? 'none' : '');
+    document.querySelectorAll('.solo-recurrente').forEach(el => el.style.display = recurrente ? '' : 'none');
+  }
+  tipoProgramacionEl.addEventListener('change', mostrarCamposTipo);
 
   function getPayload() {
-    const esRecurrente = esRecurrenteEl.checked;
+    const esRecurrente = tipoProgramacionEl.value === 'recurrente';
     const payload = {
       query: origen === 'excel' ? '' : queryEl.value.trim(),
       excel_id: origen === 'excel' ? excelId : null,
@@ -788,229 +603,49 @@
     return data;
   }
 
-  // ========== MULTI-SELECT ==========
-  function initMultiSelect(containerId, triggerId, dropdownId, onChange) {
-    const trigger = document.getElementById(triggerId);
-    const dropdown = document.getElementById(dropdownId);
-    let selected = [];
+  // ========== CONSTRUCTOR: PLANTILLAS POR MOMENTO ==========
+  const momentoSel = document.getElementById('maMomento');
+  const mensajeSel = document.getElementById('maMensajeSelect');
+  let plantillasSms = [];
 
-    function actualizarTrigger() {
-      if (selected.length === 0) {
-        trigger.innerHTML = '<span class="multi-select-placeholder">-- Selecciona --</span>';
-      } else if (selected.length <= 3) {
-        trigger.innerHTML = selected.map(v => 
-          `<span class="multi-select-chip">${escapeHtml(v)}<span class="remove-chip" data-val="${escapeHtml(v)}">&times;</span></span>`
-        ).join('');
-      } else {
-        trigger.innerHTML = `<span class="multi-select-chip">${selected.length} seleccionados</span>`;
-      }
-      trigger.querySelectorAll('.remove-chip').forEach(chip => {
-        chip.addEventListener('click', (e) => {
-          e.stopPropagation();
-          selected = selected.filter(v => v !== chip.dataset.val);
-          actualizarTrigger();
-          sincronizarCheckboxes();
-          if (onChange) onChange(selected);
-        });
-      });
-    }
-
-    function sincronizarCheckboxes() {
-      const container = dropdown.querySelector('.multi-select-options');
-      if (!container) return;
-      container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-        cb.checked = selected.includes(cb.value);
-      });
-    }
-
-    function filtrarOpciones(texto) {
-      const container = dropdown.querySelector('.multi-select-options');
-      if (!container) return;
-      const filtro = texto.toLowerCase().trim();
-      container.querySelectorAll('label').forEach(label => {
-        label.style.display = label.textContent.trim().toLowerCase().includes(filtro) ? '' : 'none';
-      });
-    }
-
-    function construirDropdown(opciones) {
-      let html = `<div class="multi-select-search"><input type="text" placeholder="Buscar operador..." class="multi-select-filter"></div><div class="multi-select-options">`;
-      opciones.forEach(op => { html += `<label><input type="checkbox" value="${escapeHtml(op)}"> ${escapeHtml(op)}</label>`; });
-      html += `</div><div class="multi-select-actions"><button class="btn-todos">Todos</button><button class="btn-ninguno">Ninguno</button><button class="btn-aplicar">Aplicar</button></div>`;
-      dropdown.innerHTML = html;
-
-      dropdown.querySelector('.multi-select-filter')?.addEventListener('input', (e) => filtrarOpciones(e.target.value));
-
-      dropdown.querySelector('.btn-todos').addEventListener('click', (e) => {
-        e.stopPropagation();
-        selected = [...dropdown.querySelectorAll('.multi-select-options label')].filter(l => l.style.display !== 'none').map(l => l.querySelector('input').value);
-        actualizarTrigger(); sincronizarCheckboxes();
-        if (onChange) onChange(selected);
-        dropdown.classList.remove('open');
-      });
-
-      dropdown.querySelector('.btn-ninguno').addEventListener('click', (e) => {
-        e.stopPropagation();
-        selected = []; actualizarTrigger(); sincronizarCheckboxes();
-        if (onChange) onChange(selected);
-        dropdown.classList.remove('open');
-      });
-
-      dropdown.querySelector('.btn-aplicar').addEventListener('click', (e) => {
-        e.stopPropagation();
-        selected = [...dropdown.querySelectorAll('.multi-select-options input:checked')].map(cb => cb.value);
-        actualizarTrigger();
-        if (onChange) onChange(selected);
-        dropdown.classList.remove('open');
-      });
-
-      dropdown.querySelectorAll('.multi-select-options label').forEach(label => {
-        label.addEventListener('click', (e) => e.stopPropagation());
-        label.querySelector('input')?.addEventListener('change', () => {
-          selected = [...dropdown.querySelectorAll('.multi-select-options input:checked')].map(c => c.value);
-          actualizarTrigger();
-          if (onChange) onChange(selected);
-        });
-      });
-
-      sincronizarCheckboxes();
-    }
-
-    trigger.addEventListener('click', (e) => {
-      e.stopPropagation();
-      dropdown.classList.toggle('open');
-      if (dropdown.classList.contains('open')) setTimeout(() => dropdown.querySelector('.multi-select-filter')?.focus(), 50);
-    });
-    document.addEventListener('click', () => dropdown.classList.remove('open'));
-
-    return {
-      setOpciones: construirDropdown,
-      getSelected: () => selected,
-      setSelected: (valores) => { selected = [...valores]; actualizarTrigger(); sincronizarCheckboxes(); },
-      limpiar: () => { selected = []; actualizarTrigger(); sincronizarCheckboxes(); }
-    };
-  }
-
-  // ========== FILTROS ==========
-  async function cargarTiposPorOperador(operadoresSeleccionados) {
-    const selTipo = document.getElementById('maFiltroIntensidad');
-    const selMensaje = document.getElementById('maMensajeSelect');
-    selTipo.innerHTML = '<option value="">Cargando...</option>';
-    selMensaje.innerHTML = '<option value="">-- Selecciona mensaje --</option>';
-    const primerOperador = operadoresSeleccionados?.[0];
-    if (!primerOperador) { selTipo.innerHTML = '<option value="">Tipo</option>'; return; }
+  // Momentos que tienen plantillas activas.
+  async function cargarMomentos() {
     try {
-      const resp = await fetch(`/api/sms/tipos-por-operador?operador=${encodeURIComponent(primerOperador)}`);
-      const data = await resp.json();
-      if (data.success && data.items?.length > 0) {
-        selTipo.innerHTML = '<option value="">Tipo</option>' + data.items.map(t => `<option value="${t}">${t}</option>`).join('');
-      } else {
-        selTipo.innerHTML = '<option value="">No hay tipos</option>';
-      }
-    } catch (e) { selTipo.innerHTML = '<option value="">Error</option>'; }
+      const data = await (await fetch('/api/sms/mensajes?activos=1')).json();
+      const momentos = [...new Set((data.items || []).map(m => m.momento).filter(Boolean))].sort();
+      momentoSel.innerHTML = '<option value="">-- Todos --</option>' +
+        momentos.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+      await cargarPlantillasSms();
+    } catch (e) { console.error('Error cargando momentos:', e); }
   }
 
-  async function cargarDatosIniciales() {
+  // Plantillas activas del momento elegido (todas si no hay momento).
+  async function cargarPlantillasSms() {
+    mensajeSel.innerHTML = '<option value="">Cargando...</option>';
     try {
-      const respOps = await fetch('/api/sms/operadores');
-      const dataOps = await respOps.json();
-      if (dataOps.success) {
-        if (!msOperador) {
-          msOperador = initMultiSelect('msOperadorContainer', 'msOperadorTrigger', 'msOperadorDropdown', (selected) => {
-            cargarCategorias(selected);
-            const categoria = document.getElementById('maFiltroCategoria').value;
-            if (selected.length > 0) {
-              categoria ? cargarTipos(selected, categoria) : cargarTiposPorOperador(selected);
-            }
-          });
-        }
-        msOperador.setOpciones(dataOps.items);
-      }
-      await cargarCategorias([]);
-    } catch (e) { console.error('Error cargando datos iniciales:', e); }
+      const params = new URLSearchParams({ activos: '1' });
+      if (momentoSel.value) params.append('momento', momentoSel.value);
+      const data = await (await fetch(`/api/sms/mensajes?${params}`)).json();
+      plantillasSms = data.items || [];
+      mensajeSel.innerHTML = plantillasSms.length === 0 ? '<option value="">-- Sin mensajes --</option>' :
+        '<option value="">-- Selecciona mensaje --</option>' + plantillasSms.map(m =>
+          `<option value="${m.id}">${momentoSel.value ? '' : escapeHtml(m.momento || 'Sin momento') + ' · '}${escapeHtml((m.mensaje || '').substring(0, 60))}</option>`).join('');
+    } catch (e) { mensajeSel.innerHTML = '<option value="">-- Error --</option>'; }
   }
 
-  async function cargarCategorias(operadoresSeleccionados) {
-    const selCategoria = document.getElementById('maFiltroCategoria');
-    const categoriaActual = selCategoria.value;
-    selCategoria.innerHTML = '<option value="">-- Categoría --</option>';
-    try {
-      let url = '/api/sms/categorias';
-      const primerOperador = operadoresSeleccionados?.[0];
-      if (primerOperador) url = `/api/sms/categorias-por-operador?operador=${encodeURIComponent(primerOperador)}`;
-      const resp = await fetch(url);
-      const data = await resp.json();
-      if (data.success) {
-        const items = data.items || [];
-        selCategoria.innerHTML = '<option value="">-- Categoría --</option>' + items.map(c => `<option value="${c}">${c}</option>`).join('');
-        if (categoriaActual && items.includes(categoriaActual)) selCategoria.value = categoriaActual;
-        if (selCategoria.value) cargarTipos(operadoresSeleccionados, selCategoria.value);
-      }
-    } catch (e) { console.error('Error cargando categorías:', e); }
-  }
+  momentoSel.addEventListener('change', cargarPlantillasSms);
 
-  async function cargarTipos(operadoresSeleccionados, categoria) {
-    const selTipo = document.getElementById('maFiltroIntensidad');
-    selTipo.innerHTML = '<option value="">Tipo</option>';
-    const primerOperador = operadoresSeleccionados?.[0];
-    try {
-      const params = new URLSearchParams();
-      if (primerOperador) params.append('operador', primerOperador);
-      if (categoria) params.append('categoria', categoria);
-      const resp = await fetch(`/api/sms/tipos?${params}`);
-      const data = await resp.json();
-      if (data.success) selTipo.innerHTML = '<option value="">Tipo</option>' + (data.items || []).map(t => `<option value="${t}">${t}</option>`).join('');
-    } catch (e) { console.error('Error cargando tipos:', e); }
-  }
-
-  async function cargarMensajes(operadoresSeleccionados, categoria, tipo) {
-    const selMensaje = document.getElementById('maMensajeSelect');
-    selMensaje.innerHTML = '<option value="">Cargando...</option>';
-    const primerOperador = operadoresSeleccionados?.[0];
-    try {
-      const params = new URLSearchParams();
-      if (tipo) params.append('tipo', tipo);
-      if (primerOperador) params.append('operador', primerOperador);
-      if (categoria) params.append('categoria', categoria);
-      const resp = await fetch(`/api/sms/mensajes-operacion?${params}`);
-      const data = await resp.json();
-      if (data.success) {
-        const items = data.items || [];
-        selMensaje.innerHTML = items.length === 0 ? '<option value="">-- Sin mensajes --</option>' :
-          '<option value="">-- Selecciona mensaje --</option>' + items.map((m, i) => `<option value="${m.id}" data-mensaje="${escapeHtml(m.mensaje || '')}">${i+1}: ${escapeHtml((m.mensaje||'').substring(0,50))}...</option>`).join('');
-        if (items.length === 1) { selMensaje.value = items[0].id; selMensaje.dispatchEvent(new Event('change')); }
-      }
-    } catch (e) { selMensaje.innerHTML = '<option value="">-- Error --</option>'; }
-  }
-
-  document.getElementById('maFiltroCategoria').addEventListener('change', function() {
-    const categoria = this.value;
-    const operadores = msOperador ? msOperador.getSelected() : [];
-    if (categoria) cargarTipos(operadores, categoria);
-    else {
-      document.getElementById('maFiltroIntensidad').innerHTML = '<option value="">Tipo</option>';
-      document.getElementById('maMensajeSelect').innerHTML = '<option value="">-- Selecciona mensaje --</option>';
-    }
-  });
-
-  document.getElementById('maFiltroIntensidad').addEventListener('change', function() {
-    const tipo = this.value;
-    const categoria = document.getElementById('maFiltroCategoria').value;
-    const operadores = msOperador ? msOperador.getSelected() : [];
-    if (tipo) cargarMensajes(operadores, categoria, tipo);
-    else document.getElementById('maMensajeSelect').innerHTML = '<option value="">-- Selecciona mensaje --</option>';
-  });
-
-  document.getElementById('maMensajeSelect').addEventListener('change', function() {
-    const mensaje = this.options[this.selectedIndex]?.getAttribute('data-mensaje');
-    if (mensaje) {
-      plantillaEl.value = mensaje;
+  mensajeSel.addEventListener('change', function() {
+    const m = plantillasSms.find(x => String(x.id) === this.value);
+    if (m) {
+      plantillaEl.value = m.mensaje;
       document.getElementById('idMensajeHidden').value = this.value;
       actualizarMockup();
       showToast('✅ Plantilla cargada', 'success', 2000);
     }
   });
 
-  cargarDatosIniciales();
+  cargarMomentos();
 
   // ========== PROBAR CONSULTA ==========
   previewBtn.addEventListener('click', async () => {
@@ -1097,43 +732,21 @@
     finally { setLoading(sendBtn, false); }
   });
 
-  // ========== PROGRAMAR SIMPLE ==========
+  // ========== PROGRAMAR (simple o recurrente) ==========
   scheduleBtn.addEventListener('click', async () => {
-    const fecha = fechaProgramadaEl.value;
-    const hora = horaProgramadaEl.value || '08:00';
-    if (faltantes({ hora: 'simple' })) return;
+    const recurrente = tipoProgramacionEl.value === 'recurrente';
+    if (faltantes({ hora: recurrente ? 'recurrente' : 'simple' })) return;
     try {
       setLoading(scheduleBtn, true);
-      const payload = getPayload();
-      payload.fecha_programada = `${fecha}T${hora}`;
-      const data = await callAPI('/api/sms/programar', payload);
+      const data = await callAPI(recurrente ? '/api/sms/programar-recurrente' : '/api/sms/programar', getPayload());
+      const cuando = recurrente
+        ? `Todos los días a las ${horaRecurrenteEl.value}${fechaLimiteEl.value ? ' hasta ' + fechaLimiteEl.value : ''}`
+        : `${fechaProgramadaEl.value} ${horaProgramadaEl.value}`;
       showToast(`✅ Programado (ID: ${data.id})`, 'success', 5000);
-      showResult(`<div class="alert alert-success mb-0"><i class="fas fa-check-circle"></i> <strong>Programado</strong><br>ID: <code>${data.id}</code><br>Fecha: ${fecha} ${hora}<br>Destinatarios: ${data.total_destinatarios || '—'}</div>`);
-      fechaProgramadaEl.value = '';
-      horaProgramadaEl.value = '08:00';
+      showResult(`<div class="alert alert-success mb-0"><i class="fas fa-check-circle"></i> <strong>Programación creada</strong><br>ID: <code>${data.id}</code><br>${escapeHtml(cuando)}<br>Destinatarios hoy: ${data.total_destinatarios || '—'}</div>`);
+      if (window.cargarProgramacionesSms) window.cargarProgramacionesSms();
     } catch (error) { showToast(`❌ ${escapeHtml(error.message)}`, 'danger'); }
     finally { setLoading(scheduleBtn, false); }
-  });
-
-  // ========== PROGRAMAR RECURRENTE ==========
-  scheduleRecurrentBtn.addEventListener('click', async () => {
-    const hora = horaRecurrenteEl.value;
-    const fechaFin = fechaLimiteEl.value;
-    if (faltantes({ hora: 'recurrente' })) return;
-    try {
-      setLoading(scheduleRecurrentBtn, true);
-      const payload = getPayload();
-      const data = await callAPI('/api/sms/programar-recurrente', payload);
-      showToast(`✅ Programación recurrente creada (ID: ${data.id})`, 'success', 5000);
-      showResult(`<div class="alert alert-success mb-0"><i class="fas fa-check-circle"></i> <strong>Programación recurrente</strong><br>ID: <code>${data.id}</code><br>Hora: ${hora}<br>${fechaFin ? 'Fecha fin: ' + fechaFin + '<br>' : ''}Destinatarios: ${data.total_destinatarios || '—'}</div>`);
-      esRecurrenteEl.checked = false;
-      recurrenciaOpciones.style.display = 'none';
-      scheduleRecurrentBtn.style.display = 'none';
-      scheduleBtn.style.display = 'inline-flex';
-      horaRecurrenteEl.value = '08:00';
-      fechaLimiteEl.value = '';
-    } catch (error) { showToast(`❌ ${escapeHtml(error.message)}`, 'danger'); }
-    finally { setLoading(scheduleRecurrentBtn, false); }
   });
 
   // ========== LIMPIAR ==========
@@ -1143,35 +756,19 @@
     document.getElementById('linkWhatsapp').value = '';
     confirmarReenvioEl.checked = false;
     fechaProgramadaEl.value = ''; horaProgramadaEl.value = '08:00';
-    esRecurrenteEl.checked = false; recurrenciaOpciones.style.display = 'none';
-    scheduleRecurrentBtn.style.display = 'none'; scheduleBtn.style.display = 'inline-flex';
+    tipoProgramacionEl.value = 'simple'; mostrarCamposTipo();
     horaRecurrenteEl.value = '08:00'; fechaLimiteEl.value = '';
     document.getElementById('idMensajeHidden').value = '';
-    if (msOperador) msOperador.limpiar();
-    document.getElementById('maFiltroCategoria').innerHTML = '<option value="">-- Categoría --</option>';
-    document.getElementById('maFiltroIntensidad').innerHTML = '<option value="">Tipo</option>';
-    document.getElementById('maMensajeSelect').innerHTML = '<option value="">-- Selecciona mensaje --</option>';
+    momentoSel.value = ''; cargarPlantillasSms();
     phoneBubble.textContent = 'Escribe tu plantilla...'; phoneBubble.classList.add('is-placeholder');
     phoneMetaCount.textContent = '0 caracteres'; charCounter.textContent = '0 caracteres · 1 segmento';
     rowCount.textContent = '0 filas'; document.getElementById('duplicateFlag').className = 'sms-flag';
     showToast('🧹 Limpiado', 'info', 2000);
   });
 
-  // ========== TABS ==========
-  tabs.forEach(tab => tab.addEventListener('click', () => {
-    tabs.forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    Object.keys(panels).forEach(key => panels[key].classList.toggle('active', key === tab.dataset.tab));
-  }));
-
   // ========== INICIALIZACIÓN ==========
   plantillaEl.addEventListener('input', actualizarMockup);
   actualizarMockup();
-  
-  // Cargar programaciones al inicio
-  setTimeout(() => {
-    showToast('💬 Listo · Usa "Probar consulta" para validar', 'info', 4000);
-  }, 500);
 
 })();
 </script>

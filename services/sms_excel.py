@@ -65,14 +65,11 @@ COMPLETAR_DESDE_INTRADIA = {
     "Ley Contacto": ("LEY_CONTACTO",),
 }
 
-# Link según lo que contenga el Id Mensaje. WS (WhatsApp) cambia cada día:
-# va en la columna Link WhatsApp del Excel; basta escribirlo en una fila y
-# se usa para todos los WS de la base.
-LINK_POR_ID_MENSAJE = (
-    ("PBX", "https://qnt.com.co/wp-content/llamar.html"),
-    ("PAG", "https://qnt.com.co/pagos-qnt/"),
-    ("LAND", "https://portalclientes.qnt.com.co/inicio"),
-)
+# Link fijo según lo que contenga el Id Mensaje, ej. ("PAG", "https://.../pagos").
+# Vacío hasta tener los links de Valoro. WS (WhatsApp) cambia cada día: va en
+# la columna Link WhatsApp del Excel; basta escribirlo en una fila y se usa
+# para todos los WS de la base.
+LINK_POR_ID_MENSAJE = ()
 
 _VACIOS = ("", "nan", "none", "null", "nat", "<na>")
 
