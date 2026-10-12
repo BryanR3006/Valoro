@@ -1,479 +1,136 @@
 {% extends "layouts/adminlte.html" %}
 
-{% block title %}Configuración de Mensajes{% endblock %}
+{% block title %}Plantillas SMS{% endblock %}
 
-{% block page_title %}
-  <div class="d-flex align-items-center gap-2 mb-1">
-    <h1 class="h3 font-weight-bold mb-0 text-dark">Configuración de Mensajes</h1>
-  </div>
-  <small class="text-muted">Gestión de plantillas SMS por operador y categoría</small>
-{% endblock %}
-
-{% block breadcrumb %}
-<li class="breadcrumb-item"><a href="/" class="text-decoration-none">Inicio</a></li>
-<li class="breadcrumb-item active">Mensajes</li>
-{% endblock %}
+{% block page_title %}<h1>Plantillas SMS</h1>{% endblock %}
+{% block page_subtitle %}Mensajes guardados por momento del cliente. Se eligen en el constructor de mensaje de Enviar SMS y Programaciones SMS.{% endblock %}
 
 {% block extra_css %}
 <style>
-  :root {
-    --primary-color: var(--primary);
-    --bg-light: var(--valoro-claro-2);
-    --border-color: var(--border);
-  }
+  .badge-activo { background: var(--success-bg); color: #1d5c12; border: 1px solid var(--success-border); }
+  .badge-inactivo { background: var(--danger-bg); color: #9b1c1c; border: 1px solid var(--danger-border); }
+  .badge-momento { background: #fff6cf; color: #6b5200; border: 1px solid #f4dc7a; }
 
-  .badge-activo { 
-    background-color: #ecfdf5; color: #047857; 
-    border: 1px solid #a7f3d0; font-weight: 600;
-    padding: 0.35em 0.75em; border-radius: 50px; font-size: 0.75rem;
-  }
-  .badge-inactivo { 
-    background-color: #fef2f2; color: #b91c1c; 
-    border: 1px solid #fecaca; font-weight: 600;
-    padding: 0.35em 0.75em; border-radius: 50px; font-size: 0.75rem;
-  }
-  .badge-categoria {
-    background-color: #eef7e8; color: #256418;
-    border: 1px solid #c6e2b8; font-weight: 600;
-    padding: 0.3em 0.7em; border-radius: 50px; font-size: 0.72rem;
-  }
-  .badge-operadores {
-    background-color: #fef3c7; color: #92400e;
-    border: 1px solid #fcd34d; font-weight: 600;
-    padding: 0.2em 0.6em; border-radius: 50px; font-size: 0.68rem;
-    margin-right: 2px;
-    display: inline-block;
-    margin-bottom: 2px;
-  }
+  .mensaje-preview { max-width: 520px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  .mensaje-preview {
-    max-width: 280px; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; color: #334155;
-  }
-
-  .card-modern {
-    background: #ffffff; border-radius: 12px;
-    border: 1px solid var(--border-color);
-    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.03), 0 2px 4px -2px rgba(0,0,0,0.03);
-    margin-bottom: 1.25rem;
-  }
-
-  .form-control, .form-control-sm {
-    border-radius: 8px; border: 1px solid var(--border-color);
-    background-color: #ffffff; color: #1e293b; transition: all 0.2s ease;
-  }
-  .form-control:focus, .form-control-sm:focus {
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 3px rgba(47,125,30,0.15); outline: none;
-  }
-
-  .filtros-bar {
-    display: flex; flex-wrap: wrap; align-items: flex-end; gap: 1rem ; padding :20px;
-    
-}
-  .filtros-bar .filtro-grupo {
-    flex: 1 1 140px; min-width: 120px;
-  }
+  .filtros-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 1rem; padding: 18px 20px; }
+  .filtros-bar .filtro-grupo { flex: 1 1 160px; min-width: 140px; }
   .filtros-bar .filtro-grupo label {
-    font-size: .72rem; text-transform: uppercase;
-    letter-spacing: .05em; color: var(--text-muted);
-    margin-bottom: .4rem; font-weight: 700;
+    font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--text-secondary); margin-bottom: .4rem; font-weight: 700;
   }
 
-  .btn {
-    border-radius: 8px; font-weight: 500; transition: all 0.2s ease;
-  }
-  .btn-primary {
-    background-color: var(--primary-color); border-color: var(--primary-color);
-    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05);
-  }
-  .btn-primary:hover {
-    background-color: var(--primary-hover); border-color: var(--primary-hover);
-    transform: translateY(-1px);
-  }
-  .btn-outline-secondary {
-    border-color: var(--border-color); color: #475569;
-  }
-  .btn-outline-secondary:hover {
-    background-color: #f1f5f9; color: #0f172a; border-color: #cbd5e1;
-  }
-
-  .table { margin-bottom: 0; }
-  .table th {
-    font-size: 0.75rem; text-transform: uppercase;
-    letter-spacing: 0.05em; color: var(--text-muted);
-    border-bottom: 1px solid var(--border-color);
-    padding: 0.85rem 1rem; vertical-align: middle;
-    position: relative;
-  }
-  .table td {
-    padding: 0.85rem 1rem; vertical-align: middle;
-    border-bottom: 1px solid #f1f5f9;
-  }
-  th.sortable {
-    cursor: pointer; user-select: none; white-space: nowrap;
-    transition: background-color 0.2s;
-  }
-  th.sortable:hover { background-color: #f1f5f9; }
+  th.sortable { cursor: pointer; user-select: none; }
   th.sortable .sort-icon { margin-left: 4px; opacity: .3; font-size: .75em; }
-  th.sortable.sort-active .sort-icon { opacity: 1; color: var(--primary-color); }
+  th.sortable.sort-active .sort-icon { opacity: 1; color: var(--primary); }
 
-  .modal-backdrop-custom {
-    position: fixed; inset: 0;
-    background: rgba(15,23,42,0.45); z-index: 1050;
-    display: none; align-items: center; justify-content: center;
-    padding: 1.5rem; backdrop-filter: blur(8px);
+  .momento-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .momento-chip {
+    background: var(--success-bg); color: #1d5c12; border: 1px solid var(--success-border);
+    padding: 2px 10px; border-radius: 50px; font-size: 0.72rem; cursor: pointer; font-weight: 600;
   }
-  .modal-backdrop-custom.open { display: flex; }
-  .modal-custom-panel {
-    background: #ffffff;
-    border-radius: 16px;
-    width: 100%;
-    max-width: 560px;
-    box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);
-    animation: modalPop .2s cubic-bezier(0.16,1,0.3,1);
-    overflow: hidden;
-}
-
-@media (max-height: 700px) {
-    .modal-custom-panel {
-        max-height: 90vh;
-        overflow-y: auto;
-    }
-}
-  @keyframes modalPop {
-    from { opacity: 0; transform: scale(0.96) translateY(10px); }
-    to { opacity: 1; transform: scale(1) translateY(0); }
-  }
-  .modal-custom-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border-color);
-  }
-  .modal-custom-header h3 { margin: 0; font-size: 1.1rem; font-weight: 600; color: #0f172a; }
-  .modal-custom-close {
-    background: none; border: none; font-size: 1.25rem;
-    color: var(--text-muted); cursor: pointer; border-radius: 6px;
-    padding: 2px 8px; transition: all 0.2s;
-  }
-  .modal-custom-close:hover { background-color: #f1f5f9; color: #0f172a; }
-  .modal-custom-body { padding: 1.5rem; }
-  .modal-custom-footer {
-    padding: 1rem 1.5rem; background-color: #f8fafc;
-    border-top: 1px solid var(--border-color);
-    display: flex; justify-content: flex-end; gap: .5rem;
-  }
-
-  .categoria-sugerencias {
-    display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
-  }
-  .categoria-chip {
-    background: #eef7e8; color: #256418; border: 1px solid #c6e2b8;
-    padding: 2px 10px; border-radius: 50px; font-size: 0.7rem;
-    cursor: pointer; font-weight: 600; transition: all 0.2s;
-  }
-  .categoria-chip:hover { background: #c6e2b8; }
-
-  /* Multi-select con chips y buscador */
-  .multi-select-container {
-    position: relative;
-  }
-  .multi-select-trigger {
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 7px 10px;
-    font-size: 0.82rem;
-    cursor: pointer;
-    background: #fff;
-    min-height: 36px;
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 4px;
-    transition: all 0.2s;
-  }
-  .multi-select-trigger:hover { border-color: var(--primary-color); }
-  .multi-select-chip {
-    background: #eef7e8;
-    color: #256418;
-    border: 1px solid #c6e2b8;
-    padding: 2px 8px;
-    border-radius: 50px;
-    font-size: 0.7rem;
-    font-weight: 600;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .multi-select-chip .remove-chip {
-    cursor: pointer;
-    font-size: 0.8rem;
-    color: #2f7d1e;
-  }
-  .multi-select-chip .remove-chip:hover { color: #e24c4b; }
-  .multi-select-placeholder { color: #94a3b8; font-size: 0.82rem; }
-
-  .multi-select-dropdown {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    background: #fff;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.1);
-    z-index: 100;
-    max-height: 260px;
-    display: none;
-    margin-top: 4px;
-    overflow: hidden;
-    flex-direction: column;
-  }
-  .multi-select-dropdown.open { display: flex; }
-
-  .multi-select-search {
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border-color);
-    flex-shrink: 0;
-  }
-  .multi-select-search input {
-    width: 100%;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 0.82rem;
-    outline: none;
-    transition: border 0.2s;
-  }
-  .multi-select-search input:focus {
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 3px rgba(47,125,30,0.15);
-  }
-
-  .multi-select-options {
-    flex: 1;
-    overflow-y: auto;
-    padding: 4px 0;
-  }
-  .multi-select-options label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    cursor: pointer;
-    font-size: 0.82rem;
-    font-weight: 500;
-    transition: background 0.15s;
-  }
-  .multi-select-options label:hover { background: #f1f5f9; }
-  .multi-select-options input[type="checkbox"] { accent-color: var(--primary-color); }
-
-  .multi-select-actions {
-    display: flex;
-    gap: 8px;
-    padding: 8px 12px;
-    border-top: 1px solid var(--border-color);
-    flex-shrink: 0;
-  }
-  .multi-select-actions button {
-    flex: 1;
-    font-size: 0.72rem;
-    padding: 5px 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border-color);
-    background: #fff;
-    cursor: pointer;
-    font-weight: 600;
-  }
-  .multi-select-actions .btn-aplicar {
-    background: var(--primary-color);
-    color: #fff;
-    border-color: var(--primary-color);
-  }
-    /* ====== FIX: Multi-select dropdown por encima de todo ====== */
-  .multi-select-container {
-    position: relative;
-    z-index: 1050 !important;
-  }
-  
-  .multi-select-dropdown {
-    position: absolute;
-    z-index: 1060 !important;
-    background: #fff;
-    border: 1px solid var(--sms-border);
-    border-radius: 10px;
-    box-shadow: 0 8px 30px rgba(0,0,0,0.15);
-    max-height: 260px;
-    overflow: hidden;
-    display: none;
-    flex-direction: column;
-    width: 100%;
-    min-width: 200px;
-  }
-  
-  .multi-select-dropdown.open {
-    display: flex !important;
-  }
-  
-  /* Asegurar que el contenedor de la tabla no interfiera */
-  .table-responsive {
-    position: relative;
-    z-index: 1;
-  }
-  
-  /* Forzar que el dropdown esté por encima de todo */
-  .multi-select-dropdown .multi-select-options {
-    max-height: 180px;
-    overflow-y: auto;
-  }
+  .momento-chip:hover { background: var(--success-border); }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="container-fluid">
+<div id="smsToastArea"></div>
 
-  <!-- Toast Container -->
-  <div id="toastArea" style="position:fixed;top:1rem;right:1rem;z-index:9999;display:flex;flex-direction:column;gap:0.5rem;"></div>
-
-  <!-- Filtros -->
-  <div class="card-modern p-3">
-    <div class="filtros-bar">
-      <div class="filtro-grupo">
-        <label>Categoría</label>
-        <div class="multi-select-container" id="msCategoria">
-          <div class="multi-select-trigger" id="msCategoriaTrigger">
-            <span class="multi-select-placeholder">Todas</span>
-          </div>
-          <div class="multi-select-dropdown" id="msCategoriaDropdown"></div>
-        </div>
-      </div>
-      <div class="filtro-grupo">
-        <label>Operador</label>
-        <div class="multi-select-container" id="msOperador">
-          <div class="multi-select-trigger" id="msOperadorTrigger">
-            <span class="multi-select-placeholder">Todos</span>
-          </div>
-          <div class="multi-select-dropdown" id="msOperadorDropdown"></div>
-        </div>
-      </div>
-      <div class="filtro-grupo">
-        <label for="fTipo">Tipo</label>
-        <select id="fTipo" class="form-control form-control-sm">
-          <option value="">Todos</option>
-          <option value="baja">Baja</option>
-          <option value="media">Media</option>
-          <option value="media-alta">Media-Alta</option>
-          <option value="alta">Alta</option>
-        </select>
-      </div>
-      <div class="filtro-grupo">
-        <label for="fEstado">Estado</label>
-        <select id="fEstado" class="form-control form-control-sm">
-          <option value="">Todos</option>
-          <option value="1">Activo</option>
-          <option value="0">Inactivo</option>
-        </select>
-      </div>
-      <div class="filtro-grupo" style="flex:2 1 200px;">
-        <label for="fBusqueda">Buscar en el mensaje</label>
-        <input type="text" id="fBusqueda" class="form-control form-control-sm" placeholder="Texto dentro de la plantilla...">
-      </div>
-      <div class="filtro-limpiar">
-        <button id="btnLimpiarFiltros" class="btn btn-sm btn-outline-secondary" title="Limpiar filtros">
-          <i class="fas fa-eraser"></i> Limpiar
-        </button>
-      </div>
+<!-- Filtros -->
+<div class="card">
+  <div class="filtros-bar">
+    <div class="filtro-grupo">
+      <label for="fMomento">Momento</label>
+      <select id="fMomento" class="form-control form-control-sm">
+        <option value="">Todos</option>
+      </select>
     </div>
-  </div>
-
-  <!-- Tabla -->
-  <div class="card-modern">
-    <div class="p-3 d-flex justify-content-between align-items-center border-bottom">
-      <h3 class="h6 font-weight-bold mb-1 text-dark" style="Padding-left:20px">Mensajes Configurados</h3>
-      <div class="d-flex align-items-center" style="gap:1rem;">
-        <span class="text-muted small" id="resultadosCount"></span>
-        <button id="btnNuevoMensaje" class="btn btn-primary btn-sm">
-          <i class="fas fa-plus "></i> Nuevo Mensaje
-        </button>
-        <br>
-      </div>
+    <div class="filtro-grupo">
+      <label for="fEstado">Estado</label>
+      <select id="fEstado" class="form-control form-control-sm">
+        <option value="">Todos</option>
+        <option value="1">Activo</option>
+        <option value="0">Inactivo</option>
+      </select>
     </div>
-    <div class="table-responsive" style="max-height:560px;overflow-y:auto;">
-      <table class="table table-hover mb-0">
-        <thead class="bg-light sticky-top">
-          <tr>
-            <th class="sortable" data-sort="id">ID <i class="fas fa-sort sort-icon"></i></th>
-            <th class="sortable" data-sort="categoria">Categoría <i class="fas fa-sort sort-icon"></i></th>
-            <th>Operadores</th>
-            <th class="sortable" data-sort="tipo">Tipo <i class="fas fa-sort sort-icon"></i></th>
-            <th>Mensaje</th>
-            <th class="sortable" data-sort="estado">Estado <i class="fas fa-sort sort-icon"></i></th>
-            <th class="text-right">Acciones</th>
-          </tr>
-        </thead>
-        <tbody id="tablaMensajes">
-          <tr><td colspan="7" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin mr-2"></i> Cargando datos...</td></tr>
-        </tbody>
-      </table>
+    <div class="filtro-grupo" style="flex:2 1 240px;">
+      <label for="fBusqueda">Buscar en el mensaje</label>
+      <input type="text" id="fBusqueda" class="form-control form-control-sm" placeholder="Texto dentro de la plantilla...">
+    </div>
+    <div>
+      <button id="btnLimpiarFiltros" class="btn btn-sm btn-outline-secondary" title="Limpiar filtros">
+        <i class="fas fa-eraser"></i> Limpiar
+      </button>
     </div>
   </div>
 </div>
 
-<!-- Modal de mensaje -->
-<div class="modal-backdrop-custom" id="modalMensaje" role="dialog" aria-modal="true">
-  <div class="modal-custom-panel">
-    <div class="modal-custom-header">
-      <h3 id="formTitulo">Nuevo Mensaje</h3>
-      <button class="modal-custom-close" id="btnCerrarModal" aria-label="Cerrar"><i class="fas fa-times"></i></button>
+<!-- Tabla -->
+<div class="card">
+  <div class="card-header">
+    <h3><i class="fas fa-file-alt"></i> Mensajes guardados</h3>
+    <div class="card-actions">
+      <span class="text-muted small" id="resultadosCount"></span>
+      <button id="btnNuevoMensaje" class="btn btn-primary btn-sm"><i class="fas fa-plus"></i> Nuevo mensaje</button>
     </div>
-    <div class="modal-custom-body">
+  </div>
+  <div class="table-responsive" style="max-height:600px;overflow-y:auto;">
+    <table class="table">
+      <thead>
+        <tr>
+          <th class="sortable" data-sort="id">ID <i class="fas fa-sort sort-icon"></i></th>
+          <th class="sortable" data-sort="momento">Momento <i class="fas fa-sort sort-icon"></i></th>
+          <th>Mensaje</th>
+          <th class="sortable" data-sort="estado">Estado <i class="fas fa-sort sort-icon"></i></th>
+          <th style="text-align:right;">Acciones</th>
+        </tr>
+      </thead>
+      <tbody id="tablaMensajes">
+        <tr><td colspan="5" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin"></i> Cargando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Modal de mensaje -->
+<div class="modal-overlay" id="modalMensaje" role="dialog" aria-modal="true">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3 id="formTitulo">Nuevo mensaje</h3>
+      <button class="modal-close" id="btnCerrarModal" aria-label="Cerrar">&times;</button>
+    </div>
+    <div class="modal-body">
       <input type="hidden" id="mensajeId" value="">
 
-      <div class="form-group mb-3">
-        <label for="msgCategoria" class="form-label font-weight-bold small">Categoría</label>
-        <input type="text" id="msgCategoria" class="form-control" placeholder="Ej: Promoción, Cobro, Extracto..." list="listaCategorias" autocomplete="off">
-        <datalist id="listaCategorias"></datalist>
-        <div class="categoria-sugerencias" id="categoriaSugerencias"></div>
-        <small class="text-muted">Agrupa mensajes por categoría</small>
-      </div>
-
-      <div class="form-group mb-3">
-        <label class="form-label font-weight-bold small">Operadores <span class="text-danger">*</span></label>
-        <div class="multi-select-container" id="msModalOperador">
-          <div class="multi-select-trigger" id="msModalOperadorTrigger">
-            <span class="multi-select-placeholder">-- Selecciona operadores --</span>
-          </div>
-          <div class="multi-select-dropdown" id="msModalOperadorDropdown"></div>
+      <div class="form-group">
+        <label for="msgMomento">Momento del cliente <span class="text-danger">*</span></label>
+        <input type="text" id="msgMomento" class="form-control" placeholder="Ej: Mora corta" list="listaMomentos" autocomplete="off" maxlength="100">
+        <datalist id="listaMomentos">
+          {% for m in momentos %}<option value="{{ m }}">{% endfor %}
+        </datalist>
+        <div class="momento-chips">
+          {% for m in momentos %}<span class="momento-chip" data-momento="{{ m }}">{{ m }}</span>{% endfor %}
         </div>
-        <small class="text-muted">Selecciona uno o varios operadores</small>
+        <small class="text-muted">Para qué momento del cliente es el mensaje. Escribe uno nuevo o elige uno.</small>
       </div>
 
-      <div class="form-group mb-3">
-        <label for="msgTipo" class="form-label font-weight-bold small">Tipo</label>
-        <select id="msgTipo" class="form-control">
-          <option value="">-- Selecciona --</option>
-          <option value="baja">Baja</option>
-          <option value="media">Media</option>
-          <option value="media-alta">Media-Alta</option>
-          <option value="alta">Alta</option>
-        </select>
+      <div class="form-group">
+        <label for="msgMensaje">Mensaje <span class="text-danger">*</span></label>
+        <textarea id="msgMensaje" class="form-control" rows="4" placeholder="Hola {{ '{{' }}Nombre Cliente{{ '}}' }}, ..."></textarea>
+        <small class="text-muted" id="msgLargo">0 caracteres</small>
       </div>
 
-      <div class="form-group mb-3">
-        <label for="msgMensaje" class="form-label font-weight-bold small">Mensaje <span class="text-danger">*</span></label>
-        <textarea id="msgMensaje" class="form-control" rows="4" placeholder="Plantilla del SMS con {{variables}}"></textarea>
-      </div>
-
-      <div class="form-group mb-0">
-        <label for="msgEstado" class="form-label font-weight-bold small">Estado</label>
+      <div class="form-group" style="margin-bottom:0;">
+        <label for="msgEstado">Estado</label>
         <select id="msgEstado" class="form-control">
           <option value="1">Activo</option>
           <option value="0">Inactivo</option>
         </select>
       </div>
     </div>
-    <div class="modal-custom-footer">
+    <div class="modal-footer">
       <button id="btnCancelar" class="btn btn-outline-secondary">Cancelar</button>
-      <button id="btnGuardar" class="btn btn-primary"><i class="fas fa-save mr-1"></i> Guardar</button>
+      <button id="btnGuardar" class="btn btn-primary"><i class="fas fa-save"></i> Guardar</button>
     </div>
   </div>
 </div>
@@ -484,540 +141,170 @@
 (function() {
   'use strict';
 
-  const modalEl = document.getElementById('modalMensaje');
-  const btnNuevoMensaje = document.getElementById('btnNuevoMensaje');
-  const btnCerrarModal = document.getElementById('btnCerrarModal');
-  const mensajeIdEl = document.getElementById('mensajeId');
-  const msgCategoriaEl = document.getElementById('msgCategoria');
-  const msgTipoEl = document.getElementById('msgTipo');
-  const msgMensajeEl = document.getElementById('msgMensaje');
-  const msgEstadoEl = document.getElementById('msgEstado');
-  const btnGuardar = document.getElementById('btnGuardar');
-  const btnCancelar = document.getElementById('btnCancelar');
-  const formTitulo = document.getElementById('formTitulo');
-  const categoriaSugerencias = document.getElementById('categoriaSugerencias');
-  const listaCategorias = document.getElementById('listaCategorias');
+  const $ = id => document.getElementById(id);
+  const modalEl = $('modalMensaje');
+  const fMomento = $('fMomento'), fEstado = $('fEstado'), fBusqueda = $('fBusqueda');
+  const tablaMensajes = $('tablaMensajes');
 
-  const fTipo = document.getElementById('fTipo');
-  const fEstado = document.getElementById('fEstado');
-  const fBusqueda = document.getElementById('fBusqueda');
-  const btnLimpiarFiltros = document.getElementById('btnLimpiarFiltros');
-  const resultadosCount = document.getElementById('resultadosCount');
+  let TODOS = [];
+  let orden = { campo: 'momento', dir: 'asc' };
 
-  const tablaMensajes = document.getElementById('tablaMensajes');
-  const toastArea = document.getElementById('toastArea');
-
-  let TODOS_LOS_MENSAJES = [];
-  let ordenActual = { campo: 'id', dir: 'asc' };
-  let msCategoria, msOperador, msModalOperador;
-
-  const escapeHTML = str => {
-    if (!str) return '';
-    return str.toString().replace(/[&<>'"]/g, tag => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
-    }[tag]));
-  };
+  const escapeHTML = str => (str ?? '').toString().replace(/[&<>'"]/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+  }[c]));
 
   function toast(msg, type = 'success') {
-    const colors = { success: '#047857', danger: '#b91c1c', warning: '#b45309', info: '#0284c7' };
-    const borders = { success: '#a7f3d0', danger: '#fecaca', warning: '#fde68a', info: '#bae6fd' };
-    const bg = { success: '#ecfdf5', danger: '#fef2f2', warning: '#fffbeb', info: '#f0f9ff' };
+    const icons = { success: 'fa-check-circle', danger: 'fa-exclamation-circle', warning: 'fa-exclamation-triangle', info: 'fa-info-circle' };
     const t = document.createElement('div');
-    t.style.cssText = `background:${bg[type]||bg.info}; border:1px solid ${borders[type]||borders.info}; color:${colors[type]||colors.info}; padding:12px 16px; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,.05); font-size:.85rem; font-weight:600; animation: modalPop .2s ease-out;`;
-    t.textContent = msg;
-    toastArea.appendChild(t);
-    setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 0.3s'; setTimeout(() => t.remove(), 300); }, 4000);
+    t.className = 'sms-toast ' + type;
+    t.innerHTML = `<span class="icon"><i class="fas ${icons[type] || icons.info}"></i></span><div class="content"></div>`;
+    t.querySelector('.content').textContent = msg;
+    $('smsToastArea').appendChild(t);
+    setTimeout(() => t.remove(), 4000);
   }
 
-  function abrirModal() { modalEl.classList.add('open'); }
-  function cerrarModal() { modalEl.classList.remove('open'); resetForm(); }
-
-  btnNuevoMensaje.addEventListener('click', abrirModal);
-  btnCerrarModal.addEventListener('click', cerrarModal);
-  btnCancelar.addEventListener('click', cerrarModal);
-  modalEl.addEventListener('click', (e) => { if (e.target === modalEl) cerrarModal(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && modalEl.classList.contains('open')) cerrarModal(); });
-
-  function actualizarSugerenciasCategoria() {
-    const categorias = [...new Set(TODOS_LOS_MENSAJES.map(i => i.categoria).filter(Boolean))].sort();
-    listaCategorias.innerHTML = categorias.map(c => `<option value="${escapeHTML(c)}">`).join('');
-    categoriaSugerencias.innerHTML = categorias.slice(0, 8).map(c => 
-      `<span class="categoria-chip" onclick="document.getElementById('msgCategoria').value='${escapeHTML(c)}'">${escapeHTML(c)}</span>`
-    ).join('');
+  // ========== MODAL ==========
+  function abrirModal() { modalEl.classList.add('active'); $('msgMomento').focus(); }
+  function cerrarModal() { modalEl.classList.remove('active'); resetForm(); }
+  function resetForm() {
+    $('mensajeId').value = ''; $('msgMomento').value = ''; $('msgMensaje').value = ''; $('msgEstado').value = '1';
+    $('formTitulo').textContent = 'Nuevo mensaje';
+    contarCaracteres();
   }
+  function contarCaracteres() { $('msgLargo').textContent = `${$('msgMensaje').value.length} caracteres`; }
 
-  // Función para obtener operadores únicos de todos los mensajes
-  function obtenerTodosOperadores() {
-    const ops = new Set();
-    TODOS_LOS_MENSAJES.forEach(m => {
-      if (m.operador) ops.add(m.operador);
-      if (m.operadores) {
-        m.operadores.split(',').forEach(o => { const t = o.trim(); if (t) ops.add(t); });
-      }
-    });
-    return [...ops].sort();
-  }
-
-  function obtenerMensajesFiltrados() {
-    const catSeleccionadas = msCategoria ? msCategoria.getSelected() : [];
-    const opSeleccionados = msOperador ? msOperador.getSelected() : [];
-    const tipoFiltro = fTipo.value;
-    const estadoFiltro = fEstado.value;
-    const busqueda = fBusqueda.value.trim().toLowerCase();
-
-    let items = TODOS_LOS_MENSAJES.filter(m => {
-      if (catSeleccionadas.length > 0 && !catSeleccionadas.includes(m.categoria)) return false;
-      if (opSeleccionados.length > 0) {
-        const todosOperadores = [m.operador, ...(m.operadores || '').split(',').map(o => o.trim()).filter(Boolean)];
-        const match = opSeleccionados.some(op => todosOperadores.includes(op));
-        if (!match) return false;
-      }
-      if (tipoFiltro && m.tipo !== tipoFiltro) return false;
-      if (estadoFiltro !== '' && String(m.estado) !== estadoFiltro) return false;
-      if (busqueda && !(m.mensaje||'').toLowerCase().includes(busqueda)) return false;
-      return true;
-    });
-
-    const { campo, dir } = ordenActual;
-    items.sort((a, b) => {
-      let va = a[campo], vb = b[campo];
-      if (campo === 'id' || campo === 'estado') {
-        va = Number(va) || 0; vb = Number(vb) || 0;
-        return dir === 'asc' ? va - vb : vb - va;
-      } else {
-        va = (va||'').toString(); vb = (vb||'').toString();
-        return dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
-      }
-    });
-    return items;
-  }
-
-  function actualizarIndicadoresOrden() {
-    document.querySelectorAll('th.sortable').forEach(th => {
-      const icon = th.querySelector('.sort-icon');
-      if (th.dataset.sort === ordenActual.campo) {
-        th.classList.add('sort-active');
-        icon.className = ordenActual.dir === 'asc' ? 'fas fa-sort-up sort-icon' : 'fas fa-sort-down sort-icon';
-      } else {
-        th.classList.remove('sort-active');
-        icon.className = 'fas fa-sort sort-icon';
-      }
-    });
-  }
-
-  document.querySelectorAll('th.sortable').forEach(th => {
-    th.addEventListener('click', () => {
-      const campo = th.dataset.sort;
-      if (ordenActual.campo === campo) {
-        ordenActual.dir = ordenActual.dir === 'asc' ? 'desc' : 'asc';
-      } else {
-        ordenActual = { campo, dir: 'asc' };
-      }
-      actualizarIndicadoresOrden();
-      renderTabla();
-    });
-  });
-
-  [fTipo, fEstado].forEach(el => el.addEventListener('change', renderTabla));
-  fBusqueda.addEventListener('input', renderTabla);
-
-  btnLimpiarFiltros.addEventListener('click', () => {
-    if (msCategoria) msCategoria.limpiar();
-    if (msOperador) msOperador.limpiar();
-    fTipo.value = ''; fEstado.value = ''; fBusqueda.value = '';
-    renderTabla();
-  });
-
-  // Renderiza la tabla con los operadores agrupados (máx 3 badges)
-  function renderTabla() {
-    const items = obtenerMensajesFiltrados();
-    resultadosCount.textContent = `${items.length} de ${TODOS_LOS_MENSAJES.length} mensajes`;
-
-    if (!items.length) {
-      tablaMensajes.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-5">No se encontraron resultados</td></tr>';
-      return;
-    }
-
-    let html = '';
-    items.forEach(m => {
-      const estadoBadge = m.estado == 1 ? '<span class="badge badge-activo">Activo</span>' : '<span class="badge badge-inactivo">Inactivo</span>';
-      const categoriaBadge = m.categoria ? `<span class="badge badge-categoria">${escapeHTML(m.categoria)}</span>` : '<span class="text-muted small">—</span>';
-      
-      // Obtener lista única de operadores
-      const todosOps = [m.operador, ...(m.operadores || '').split(',').map(o => o.trim()).filter(Boolean)];
-      const unicos = [...new Set(todosOps)];
-      let opsHtml = '';
-      if (unicos.length === 0) {
-        opsHtml = '<span class="text-muted small">—</span>';
-      } else if (unicos.length <= 3) {
-        opsHtml = unicos.map(op => `<span class="badge badge-operadores">${escapeHTML(op)}</span>`).join(' ');
-      } else {
-        // Mostrar los primeros 2 y un badge con +N
-        const primeros = unicos.slice(0, 2);
-        opsHtml = primeros.map(op => `<span class="badge badge-operadores">${escapeHTML(op)}</span>`).join(' ');
-        opsHtml += ` <span class="badge badge-operadores" style="background:#e5e7eb;color:#374151;border-color:#d1d5db;">+${unicos.length - 2}</span>`;
-      }
-
-      html += `
-        <tr>
-          <td class="text-muted small">${m.id}</td>
-          <td>${categoriaBadge}</td>
-          <td>${opsHtml}</td>
-          <td><span class="text-capitalize small font-weight-bold text-secondary">${escapeHTML(m.tipo||'—')}</span></td>
-          <td class="mensaje-preview" title="${escapeHTML(m.mensaje||'')}">${escapeHTML((m.mensaje||'').substring(0,60))}${(m.mensaje||'').length>60?'...':''}</td>
-          <td>${estadoBadge}</td>
-          <td class="text-right">
-            <button class="btn btn-sm btn-outline-secondary editar-btn border-0 mr-1" data-id="${m.id}" title="Editar"><i class="fas fa-pen"></i></button>
-            <button class="btn btn-sm btn-outline-secondary toggle-btn border-0 mr-1" data-id="${m.id}" title="Cambiar estado"><i class="fas fa-power-off"></i></button>
-            <button class="btn btn-sm btn-outline-danger eliminar-btn border-0" data-id="${m.id}" title="Eliminar"><i class="fas fa-trash-alt"></i></button>
-          </td>
-        </tr>`;
-    });
-    tablaMensajes.innerHTML = html;
-
-    document.querySelectorAll('.editar-btn').forEach(btn => btn.addEventListener('click', () => editarMensaje(btn.dataset.id)));
-    document.querySelectorAll('.toggle-btn').forEach(btn => btn.addEventListener('click', () => toggleMensaje(btn.dataset.id)));
-    document.querySelectorAll('.eliminar-btn').forEach(btn => btn.addEventListener('click', () => eliminarMensaje(btn.dataset.id)));
-  }
-
-  async function cargarMensajes() {
-    try {
-        const resp = await fetch('/api/sms/mensajes');
-        const data = await resp.json();
-
-        if (!data.success) {
-            toast(
-                data.message || 'Error al cargar datos',
-                'danger'
-            );
-            return;
-        }
-
-        TODOS_LOS_MENSAJES = data.items;
-
-        await configurarMultiSelects();
-
-        actualizarSugerenciasCategoria();
-        actualizarIndicadoresOrden();
-        renderTabla();
-
-    } catch(e) {
-        tablaMensajes.innerHTML =
-            '<tr><td colspan="7" class="text-center text-danger py-4">Error al conectar con el servidor.</td></tr>';
-
-        toast('Error al cargar datos', 'danger');
-    }
-  }  
+  $('btnNuevoMensaje').addEventListener('click', () => { resetForm(); abrirModal(); });
+  $('btnCerrarModal').addEventListener('click', cerrarModal);
+  $('btnCancelar').addEventListener('click', cerrarModal);
+  modalEl.addEventListener('click', e => { if (e.target === modalEl) cerrarModal(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && modalEl.classList.contains('active')) cerrarModal(); });
+  $('msgMensaje').addEventListener('input', contarCaracteres);
+  document.querySelectorAll('.momento-chip').forEach(chip =>
+    chip.addEventListener('click', () => { $('msgMomento').value = chip.dataset.momento; }));
 
   function editarMensaje(id) {
-    const m = TODOS_LOS_MENSAJES.find(i => i.id == id);
+    const m = TODOS.find(i => i.id == id);
     if (!m) return;
-    mensajeIdEl.value = m.id;
-    msgCategoriaEl.value = m.categoria || '';
-    msgTipoEl.value = m.tipo || '';
-    msgMensajeEl.value = m.mensaje || '';
-    msgEstadoEl.value = m.estado;
-
-    // Seleccionar operadores en el multi-select del modal
-    const todosOps = [m.operador, ...(m.operadores || '').split(',').map(o => o.trim()).filter(Boolean)];
-    const unicos = [...new Set(todosOps)];
-    // Actualizar el estado interno del multi-select
-    if (msModalOperador) {
-      msModalOperador.setSelected(unicos);
-    }
-
-    formTitulo.textContent = 'Editar Mensaje';
-    btnGuardar.innerHTML = '<i class="fas fa-save mr-1"></i> Actualizar';
+    $('mensajeId').value = m.id;
+    $('msgMomento').value = m.momento || '';
+    $('msgMensaje').value = m.mensaje || '';
+    $('msgEstado').value = m.estado;
+    $('formTitulo').textContent = 'Editar mensaje';
+    contarCaracteres();
     abrirModal();
   }
 
-  function resetForm() {
-    mensajeIdEl.value = '';
-    msgCategoriaEl.value = '';
-    msgTipoEl.value = '';
-    msgMensajeEl.value = '';
-    msgEstadoEl.value = '1';
-    formTitulo.textContent = 'Nuevo Mensaje';
-    btnGuardar.innerHTML = '<i class="fas fa-save mr-1"></i> Guardar';
-    if (msModalOperador) msModalOperador.limpiar();
-  }
-
-  btnGuardar.addEventListener('click', async () => {
-    const operadores = msModalOperador ? msModalOperador.getSelected().join(', ') : '';
-    const mensaje = msgMensajeEl.value.trim();
-    const tipo = msgTipoEl.value.trim();
-    const categoria = msgCategoriaEl.value.trim();
-    const estado = parseInt(msgEstadoEl.value);
-    const id = mensajeIdEl.value;
-
-    if (!operadores || !mensaje) {
-      toast('Operadores y mensaje son obligatorios', 'warning');
-      return;
-    }
-
-    btnGuardar.disabled = true;
-    const payload = { 
-      operador: operadores.split(',')[0].trim(), 
-      operadores, 
-      mensaje, 
-      tipo, 
-      categoria, 
-      estado 
+  $('btnGuardar').addEventListener('click', async () => {
+    const id = $('mensajeId').value;
+    const payload = {
+      momento: $('msgMomento').value.trim(),
+      mensaje: $('msgMensaje').value.trim(),
+      estado: parseInt($('msgEstado').value)
     };
-    const url = id ? `/api/sms/mensajes/${id}` : '/api/sms/mensajes';
-    const method = id ? 'PUT' : 'POST';
-
+    if (!payload.momento || !payload.mensaje) { toast('Momento y mensaje son obligatorios', 'warning'); return; }
+    $('btnGuardar').disabled = true;
     try {
-      const resp = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const resp = await fetch(id ? `/api/sms/mensajes/${id}` : '/api/sms/mensajes', {
+        method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
       const data = await resp.json();
-      if (data.success) {
-        toast(id ? 'Mensaje actualizado' : 'Mensaje creado');
-        cerrarModal();
-        cargarMensajes();
-      } else {
-        toast(data.message || 'Error al guardar', 'danger');
-      }
-    } catch(e) { toast('Error de red o del servidor', 'danger'); }
-    finally { btnGuardar.disabled = false; }
+      if (!data.success) throw new Error(data.message || 'Error al guardar');
+      toast(id ? 'Mensaje actualizado' : 'Mensaje creado');
+      cerrarModal();
+      cargarMensajes();
+    } catch (e) { toast(e.message, 'danger'); }
+    finally { $('btnGuardar').disabled = false; }
   });
 
   async function toggleMensaje(id) {
     try {
-      const resp = await fetch(`/api/sms/mensajes/${id}/toggle`, { method: 'POST' });
-      const data = await resp.json();
+      const data = await (await fetch(`/api/sms/mensajes/${id}/toggle`, { method: 'POST' })).json();
       if (data.success) { toast(data.message); cargarMensajes(); }
-    } catch(e) { toast('Error al cambiar de estado', 'danger'); }
+    } catch (e) { toast('Error al cambiar de estado', 'danger'); }
   }
 
   async function eliminarMensaje(id) {
-    if (!confirm('¿Estás seguro de eliminar este mensaje?')) return;
+    if (!confirm('¿Eliminar este mensaje?')) return;
     try {
-      const resp = await fetch(`/api/sms/mensajes/${id}`, { method: 'DELETE' });
-      const data = await resp.json();
+      const data = await (await fetch(`/api/sms/mensajes/${id}`, { method: 'DELETE' })).json();
       if (data.success) { toast('Mensaje eliminado'); cargarMensajes(); }
-    } catch(e) { toast('Error al eliminar', 'danger'); }
+    } catch (e) { toast('Error al eliminar', 'danger'); }
   }
 
-  // ========== MULTI-SELECT MEJORADO CON BUSCADOR ==========
-  function initMultiSelect(containerId, triggerId, dropdownId, onChange, opciones = []) {
-    const trigger = document.getElementById(triggerId);
-    const dropdown = document.getElementById(dropdownId);
-    let selected = [];
-
-    function actualizarTrigger() {
-      if (selected.length === 0) {
-        trigger.innerHTML = '<span class="multi-select-placeholder">Todos</span>';
-      } else if (selected.length <= 3) {
-        trigger.innerHTML = selected.map(v => 
-          `<span class="multi-select-chip">${escapeHTML(v)}<span class="remove-chip" data-val="${escapeHTML(v)}">&times;</span></span>`
-        ).join('');
-      } else {
-        trigger.innerHTML = `<span class="multi-select-chip">${selected.length} seleccionados</span>`;
-      }
-      trigger.querySelectorAll('.remove-chip').forEach(chip => {
-        chip.addEventListener('click', (e) => {
-          e.stopPropagation();
-          selected = selected.filter(v => v !== chip.dataset.val);
-          actualizarTrigger();
-          sincronizarCheckboxes();
-          if (onChange) onChange(selected);
-        });
-      });
-    }
-
-    function sincronizarCheckboxes() {
-      const container = dropdown.querySelector('.multi-select-options');
-      if (!container) return;
-      container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-        cb.checked = selected.includes(cb.value);
-      });
-    }
-
-    // Filtrar opciones según búsqueda
-    function filtrarOpciones(texto) {
-      const container = dropdown.querySelector('.multi-select-options');
-      if (!container) return;
-      const labels = container.querySelectorAll('label');
-      const filtro = texto.toLowerCase().trim();
-      labels.forEach(label => {
-        const txt = label.textContent.trim().toLowerCase();
-        label.style.display = txt.includes(filtro) ? '' : 'none';
-      });
-    }
-
-    // Construir dropdown con buscador
-    function construirDropdown(opciones) {
-      let html = `
-        <div class="multi-select-search">
-          <input type="text" placeholder="Buscar operador..." class="multi-select-filter">
-        </div>
-        <div class="multi-select-options">
-      `;
-      opciones.forEach(op => {
-        html += `<label><input type="checkbox" value="${escapeHTML(op)}"> ${escapeHTML(op)}</label>`;
-      });
-      html += `</div>
-        <div class="multi-select-actions">
-          <button class="btn-todos">Todos</button>
-          <button class="btn-ninguno">Ninguno</button>
-          <button class="btn-aplicar">Aplicar</button>
-        </div>
-      `;
-      dropdown.innerHTML = html;
-
-      // Evento para filtrar
-      const filterInput = dropdown.querySelector('.multi-select-filter');
-      if (filterInput) {
-        filterInput.addEventListener('input', (e) => filtrarOpciones(e.target.value));
-      }
-
-      // Botones
-      dropdown.querySelector('.btn-todos').addEventListener('click', (e) => {
-        e.stopPropagation();
-        const opcionesActuales = [...dropdown.querySelectorAll('.multi-select-options label')]
-          .filter(label => label.style.display !== 'none')
-          .map(label => label.querySelector('input[type="checkbox"]').value);
-        selected = opcionesActuales;
-        actualizarTrigger();
-        sincronizarCheckboxes();
-        if (onChange) onChange(selected);
-        dropdown.classList.remove('open');
-      });
-
-      dropdown.querySelector('.btn-ninguno').addEventListener('click', (e) => {
-        e.stopPropagation();
-        selected = [];
-        actualizarTrigger();
-        sincronizarCheckboxes();
-        if (onChange) onChange(selected);
-        dropdown.classList.remove('open');
-      });
-
-      dropdown.querySelector('.btn-aplicar').addEventListener('click', (e) => {
-        e.stopPropagation();
-        selected = [...dropdown.querySelectorAll('.multi-select-options input[type="checkbox"]:checked')].map(cb => cb.value);
-        actualizarTrigger();
-        if (onChange) onChange(selected);
-        dropdown.classList.remove('open');
-      });
-
-      // Click en labels para toggle
-      dropdown.querySelectorAll('.multi-select-options label').forEach(label => {
-        label.addEventListener('click', (e) => {
-          // No cerrar el dropdown
-          e.stopPropagation();
-        });
-        const cb = label.querySelector('input[type="checkbox"]');
-        if (cb) {
-          cb.addEventListener('change', () => {
-            // Actualizar selected según los checkboxes marcados
-            selected = [...dropdown.querySelectorAll('.multi-select-options input[type="checkbox"]:checked')].map(c => c.value);
-            actualizarTrigger();
-            if (onChange) onChange(selected);
-          });
-        }
-      });
-
-      sincronizarCheckboxes();
-    }
-
-    trigger.addEventListener('click', (e) => {
-      e.stopPropagation();
-      dropdown.classList.toggle('open');
-      // Si se abre, enfocar el filtro
-      if (dropdown.classList.contains('open')) {
-        const filter = dropdown.querySelector('.multi-select-filter');
-        if (filter) setTimeout(() => filter.focus(), 50);
-      }
+  // ========== TABLA ==========
+  function filtrados() {
+    const momento = fMomento.value, estado = fEstado.value, busqueda = fBusqueda.value.trim().toLowerCase();
+    const items = TODOS.filter(m =>
+      (!momento || (m.momento || '') === momento) &&
+      (estado === '' || String(m.estado) === estado) &&
+      (!busqueda || (m.mensaje || '').toLowerCase().includes(busqueda)));
+    const { campo, dir } = orden;
+    items.sort((a, b) => {
+      const r = campo === 'momento'
+        ? (a.momento || '').localeCompare(b.momento || '')
+        : (Number(a[campo]) || 0) - (Number(b[campo]) || 0);
+      return dir === 'asc' ? r : -r;
     });
-    document.addEventListener('click', () => dropdown.classList.remove('open'));
-
-    const inst = {
-      setOpciones: (opciones) => {
-        construirDropdown(opciones);
-      },
-      getSelected: () => selected,
-      setSelected: (valores) => {
-        selected = [...valores];
-        actualizarTrigger();
-        sincronizarCheckboxes();
-      },
-      limpiar: () => { selected = []; actualizarTrigger(); sincronizarCheckboxes(); },
-      _actualizarTrigger: actualizarTrigger,
-    };
-    return inst;
+    return items;
   }
 
-  async function configurarMultiSelects() {
-      const categorias = [
-          ...new Set(
-              TODOS_LOS_MENSAJES
-                  .map(i => i.categoria)
-                  .filter(Boolean)
-          )
-      ].sort();
+  function renderTabla() {
+    const items = filtrados();
+    $('resultadosCount').textContent = `${items.length} de ${TODOS.length} mensajes`;
+    document.querySelectorAll('th.sortable').forEach(th => {
+      const activo = th.dataset.sort === orden.campo;
+      th.classList.toggle('sort-active', activo);
+      th.querySelector('.sort-icon').className = 'fas sort-icon ' + (activo ? (orden.dir === 'asc' ? 'fa-sort-up' : 'fa-sort-down') : 'fa-sort');
+    });
+    if (!items.length) {
+      tablaMensajes.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No hay mensajes</td></tr>';
+      return;
+    }
+    tablaMensajes.innerHTML = items.map(m => `
+      <tr>
+        <td class="text-muted small">${m.id}</td>
+        <td>${m.momento ? `<span class="badge badge-momento">${escapeHTML(m.momento)}</span>` : '<span class="text-muted small">Sin momento</span>'}</td>
+        <td class="mensaje-preview" title="${escapeHTML(m.mensaje)}">${escapeHTML(m.mensaje)}</td>
+        <td>${m.estado == 1 ? '<span class="badge badge-activo">Activo</span>' : '<span class="badge badge-inactivo">Inactivo</span>'}</td>
+        <td>
+          <div class="acciones-fila" style="justify-content:flex-end;">
+            <button class="btn-accion editar-btn" data-id="${m.id}"><i class="fas fa-pen"></i> Editar</button>
+            <button class="btn-accion toggle-btn" data-id="${m.id}"><i class="fas fa-power-off"></i> ${m.estado == 1 ? 'Desactivar' : 'Activar'}</button>
+            <button class="btn-accion peligro eliminar-btn" data-id="${m.id}"><i class="fas fa-trash-alt"></i> Eliminar</button>
+          </div>
+        </td>
+      </tr>`).join('');
+    tablaMensajes.querySelectorAll('.editar-btn').forEach(b => b.addEventListener('click', () => editarMensaje(b.dataset.id)));
+    tablaMensajes.querySelectorAll('.toggle-btn').forEach(b => b.addEventListener('click', () => toggleMensaje(b.dataset.id)));
+    tablaMensajes.querySelectorAll('.eliminar-btn').forEach(b => b.addEventListener('click', () => eliminarMensaje(b.dataset.id)));
+  }
 
-      // Operadores que realmente aparecen en los mensajes
-      const operadoresMensajes = obtenerTodosOperadores();
+  document.querySelectorAll('th.sortable').forEach(th => th.addEventListener('click', () => {
+    orden = { campo: th.dataset.sort, dir: orden.campo === th.dataset.sort && orden.dir === 'asc' ? 'desc' : 'asc' };
+    renderTabla();
+  }));
+  [fMomento, fEstado].forEach(el => el.addEventListener('change', renderTabla));
+  fBusqueda.addEventListener('input', renderTabla);
+  $('btnLimpiarFiltros').addEventListener('click', () => {
+    fMomento.value = ''; fEstado.value = ''; fBusqueda.value = '';
+    renderTabla();
+  });
 
-      // Crear los multi-select
-      if (!msCategoria) {
-          msCategoria = initMultiSelect(
-              'msCategoria',
-              'msCategoriaTrigger',
-              'msCategoriaDropdown',
-              () => renderTabla()
-          );
-      }
-
-      if (!msOperador) {
-          msOperador = initMultiSelect(
-              'msOperador',
-              'msOperadorTrigger',
-              'msOperadorDropdown',
-              () => renderTabla()
-          );
-      }
-
-      if (!msModalOperador) {
-          msModalOperador = initMultiSelect(
-              'msModalOperador',
-              'msModalOperadorTrigger',
-              'msModalOperadorDropdown',
-              null
-          );
-      }
-
-      // Categorías
-      msCategoria.setOpciones(categorias);
-
-      // Filtro de operadores de la tabla
-      msOperador.setOpciones(operadoresMensajes);
-
-      // Obtener los 27 operadores desde Python
-      try {
-          const resp = await fetch('/api/sms/operadores');
-          const data = await resp.json();
-
-          if (!data.success) {
-              toast(
-                  data.message || 'Error al cargar operadores',
-                  'danger'
-              );
-              return;
-          }
-
-          // Cargar los 27 operadores en el modal
-          msModalOperador.setOpciones(data.items);
-
-      } catch (e) {
-          console.error('Error cargando operadores:', e);
-
-          toast(
-              'No se pudieron cargar los operadores',
-              'danger'
-          );
-      }
+  async function cargarMensajes() {
+    try {
+      const data = await (await fetch('/api/sms/mensajes')).json();
+      if (!data.success) throw new Error(data.message || 'Error al cargar');
+      TODOS = data.items || [];
+      // Filtro: los momentos que tienen mensajes.
+      const actual = fMomento.value;
+      const momentos = [...new Set(TODOS.map(m => m.momento).filter(Boolean))].sort();
+      fMomento.innerHTML = '<option value="">Todos</option>' + momentos.map(m => `<option value="${escapeHTML(m)}">${escapeHTML(m)}</option>`).join('');
+      fMomento.value = momentos.includes(actual) ? actual : '';
+      renderTabla();
+    } catch (e) {
+      tablaMensajes.innerHTML = '<tr><td colspan="5" class="text-center text-danger py-4">Error al cargar los mensajes.</td></tr>';
+      toast(e.message, 'danger');
+    }
   }
 
   cargarMensajes();

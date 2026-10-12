@@ -558,8 +558,9 @@ def enviar_sms_desde_filas(
         logger.error(f"❌ SmsLog: {registro_smslog['guardados']} de {registro_smslog['total']} SMS registrados. "
                      f"Errores: {registro_smslog['errores'][:3]}")
     
-    enviados = len(successful) * batch_size  # Aproximado
-    fallidos = len(failed) * batch_size
+    # SMS que Infobip aceptó (uno por mensaje en la respuesta de cada lote).
+    enviados = sum(len(r["data"].get("messages") or []) for r in successful)
+    fallidos = len(messages) - enviados
     
     # ============================================================
     # NUEVO: Agregar bulk_ids al resultado
@@ -1253,72 +1254,3 @@ def obtener_lista_negra(client) -> List[Dict]:
     except Exception as e:
         logger.error(f"Error obteniendo lista negra: {e}")
         return []
-
-
-# ==================================================
-#  MENSAJES AUTOMÁTICOS POR OPERACIÓN
-# ==================================================
-
-MENSAJE_OPERACION_TABLE = "capable-arbor-209819.Temporal.Mensaje_Operacion"
-
-def obtener_mensaje_por_operacion(client, id_campana: str, operador: str, intensidad: str) -> Optional[Dict]:
-    """Busca un mensaje en Mensaje_Operacion por campaña, operador e intensidad."""
-    if not client:
-        return None
-    try:
-        query = f"""
-            SELECT id_mensaje, mensaje, intensidad
-            FROM `{MENSAJE_OPERACION_TABLE}`
-            WHERE id_campana = '{id_campana}'
-              AND LOWER(operador) = LOWER('{operador}')
-              AND LOWER(intensidad) = LOWER('{intensidad}')
-            LIMIT 1
-        """
-        df = client.query(query).to_dataframe()
-        if not df.empty:
-            return df.iloc[0].to_dict()
-        return None
-    except Exception as e:
-        logger.warning(f"Error buscando mensaje de operación: {e}")
-        return None
-
-def aplicar_mensaje_operacion(rows: List[Dict], client, col_campana: str = "Id Campaña", 
-                               col_operador: str = "operador", col_intensidad: str = "intensidad") -> List[Dict]:
-    """
-    Hace JOIN entre los datos de la consulta y Mensaje_Operacion.
-    Agrega el campo 'mensaje_auto' a cada fila con la plantilla correspondiente.
-    """
-    if not client or not rows:
-        return rows
-    
-    try:
-        # Obtener todos los mensajes de operación
-        query = f"SELECT * FROM `{MENSAJE_OPERACION_TABLE}`"
-        df_mensajes = client.query(query).to_dataframe()
-        
-        if df_mensajes.empty:
-            return rows
-        
-        for row in rows:
-            id_campana = str(row.get(col_campana, "")).strip()
-            operador = str(row.get(col_operador, "")).strip()
-            intensidad = str(row.get(col_intensidad, "")).strip()
-            
-            match = df_mensajes[
-                (df_mensajes["id_campana"] == id_campana) &
-                (df_mensajes["operador"].str.lower() == operador.lower()) &
-                (df_mensajes["intensidad"].str.lower() == intensidad.lower())
-            ]
-            
-            if not match.empty:
-                best = match.iloc[0]
-                row["mensaje_auto"] = best["mensaje"]
-                row["id_mensaje_auto"] = best["id_mensaje"]
-            else:
-                row["mensaje_auto"] = None
-                row["id_mensaje_auto"] = None
-        
-        return rows
-    except Exception as e:
-        logger.warning(f"Error aplicando mensaje de operación: {e}")
-        return rows

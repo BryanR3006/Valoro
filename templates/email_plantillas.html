@@ -1,15 +1,15 @@
 {% extends "layouts/adminlte.html" %}
 {% block title %}Plantillas email{% endblock %}
 {% block page_title %}Plantillas de email{% endblock %}
-{% block page_subtitle %}<small class="text-muted">Asunto y HTML guardados para elegir en Enviar Email. Usa <code>{{ '{{' }}columna{{ '}}' }}</code> para los datos de cada cliente.</small>{% endblock %}
+{% block page_subtitle %}Asunto y HTML guardados por momento del cliente, para elegir en Enviar Email y Programaciones email. Usa <code>{{ '{{' }}columna{{ '}}' }}</code> para los datos de cada cliente.{% endblock %}
 
 {% block extra_css %}
 <style>
   .pl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
   .pl-html { font-family: monospace; font-size: .82rem; min-height: 280px; }
-  .pl-vista { width: 100%; min-height: 360px; border: 1px dashed #cbd5e1; border-radius: 8px; background: #fff; }
-  .pl-asunto-vista { background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 8px 12px; font-size: .9rem; margin-bottom: 10px; }
-  .pl-var { font-family: monospace; font-size: .78rem; background: #eef2f7; border-radius: 4px; padding: 0 4px; margin: 0 3px 3px 0; display: inline-block; }
+  .pl-vista { width: 100%; min-height: 360px; border: 1px dashed var(--border-hover); border-radius: 8px; background: #fff; }
+  .pl-asunto-vista { background: var(--bg-code); border: 1px dashed var(--border-hover); border-radius: 8px; padding: 8px 12px; font-size: .9rem; margin-bottom: 10px; }
+  .pl-var { font-family: monospace; font-size: .78rem; background: var(--success-bg); border-radius: 4px; padding: 0 4px; margin: 0 3px 3px 0; display: inline-block; }
   .pl-inactiva td { opacity: .55; }
   .d-none { display: none !important; }
   .ml-auto { margin-left: auto !important; }
@@ -32,7 +32,15 @@
     <div class="card-body">
       <div class="form-group">
         <label for="plNombre">Nombre <span class="text-danger">*</span></label>
-        <input id="plNombre" class="form-control" maxlength="120" placeholder="Ej: Cobro RBK no positivos">
+        <input id="plNombre" class="form-control" maxlength="120" placeholder="Ej: Oferta de pago total">
+      </div>
+      <div class="form-group">
+        <label for="plMomento">Momento del cliente</label>
+        <input id="plMomento" class="form-control" maxlength="100" list="listaMomentos" autocomplete="off" placeholder="Ej: Mora corta">
+        <datalist id="listaMomentos">
+          {% for m in momentos %}<option value="{{ m }}">{% endfor %}
+        </datalist>
+        <small class="text-muted">Para qué momento del cliente es la plantilla. Escribe uno nuevo o elige uno.</small>
       </div>
       <div class="form-group">
         <label for="plAsunto">Asunto</label>
@@ -86,9 +94,9 @@
     <div class="table-responsive">
       <table class="table table-sm table-hover mb-0">
         <thead>
-          <tr><th>Nombre</th><th>Asunto</th><th>Variables</th><th class="text-right">Usos</th><th>Último uso</th><th>Estado</th><th>Acciones</th></tr>
+          <tr><th>Nombre</th><th>Momento</th><th>Asunto</th><th>Variables</th><th class="text-right">Usos</th><th>Último uso</th><th>Estado</th><th>Acciones</th></tr>
         </thead>
-        <tbody id="plLista"><tr><td colspan="7" class="text-muted p-3">Cargando…</td></tr></tbody>
+        <tbody id="plLista"><tr><td colspan="8" class="text-muted p-3">Cargando…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -102,7 +110,7 @@
   'use strict';
 
   const $ = id => document.getElementById(id);
-  const nombreEl = $('plNombre'), asuntoEl = $('plAsunto'), htmlEl = $('plHtml'), usuarioEl = $('plUsuario');
+  const nombreEl = $('plNombre'), momentoEl = $('plMomento'), asuntoEl = $('plAsunto'), htmlEl = $('plHtml'), usuarioEl = $('plUsuario');
   let plantillas = [];
   let editandoId = null;
 
@@ -153,7 +161,7 @@
 
   function limpiar() {
     editandoId = null;
-    nombreEl.value = asuntoEl.value = htmlEl.value = '';
+    nombreEl.value = momentoEl.value = asuntoEl.value = htmlEl.value = '';
     $('plTitulo').innerHTML = '<i class="fas fa-plus mr-1"></i> Nueva plantilla';
     $('plCancelar').classList.add('d-none');
     actualizarVista();
@@ -161,7 +169,7 @@
 
   function editar(p) {
     editandoId = p.id;
-    nombreEl.value = p.nombre; asuntoEl.value = p.asunto; htmlEl.value = p.html;
+    nombreEl.value = p.nombre; momentoEl.value = p.momento || ''; asuntoEl.value = p.asunto; htmlEl.value = p.html;
     $('plTitulo').innerHTML = '<i class="fas fa-pen mr-1"></i> Editar plantilla';
     if (p.usos) $('plTitulo').appendChild(Object.assign(document.createElement('small'),
       { className: 'text-muted', textContent: ` (usada ${p.usos} vez/veces)` }));
@@ -171,7 +179,7 @@
   }
 
   async function guardar() {
-    const cuerpo = { nombre: nombreEl.value.trim(), asunto: asuntoEl.value.trim(), html: htmlEl.value.trim(), usuario: usuarioEl.value.trim() };
+    const cuerpo = { nombre: nombreEl.value.trim(), momento: momentoEl.value.trim(), asunto: asuntoEl.value.trim(), html: htmlEl.value.trim(), usuario: usuarioEl.value.trim() };
     if (!cuerpo.nombre) { showToast('Escribe el nombre', 'warning'); return; }
     if (!cuerpo.html) { showToast('El HTML no puede estar vacío', 'warning'); return; }
     try {
@@ -216,13 +224,14 @@
     const body = $('plLista');
     body.innerHTML = '';
     if (!plantillas.length) {
-      body.innerHTML = '<tr><td colspan="7" class="text-muted p-3">Todavía no hay plantillas.</td></tr>';
+      body.innerHTML = '<tr><td colspan="8" class="text-muted p-3">Todavía no hay plantillas.</td></tr>';
       return;
     }
     plantillas.forEach(p => {
       const tr = document.createElement('tr');
       if (!p.activa) tr.className = 'pl-inactiva';
       tr.appendChild(celda(p.nombre, 'font-weight-bold'));
+      tr.appendChild(celda(p.momento || '—', 'small'));
       tr.appendChild(celda(p.asunto || '—', 'small'));
       const tdVars = document.createElement('td');
       pintarVariables(tdVars, p.variables);
@@ -256,7 +265,7 @@
     } catch (err) {
       $('plLista').innerHTML = '';
       const tr = document.createElement('tr');
-      tr.appendChild(Object.assign(celda('❌ ' + err.message), { colSpan: 7 }));
+      tr.appendChild(Object.assign(celda('❌ ' + err.message), { colSpan: 8 }));
       $('plLista').appendChild(tr);
     }
   }

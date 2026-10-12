@@ -3,8 +3,9 @@
 Aplicación web en **Flask + SQLite (Flask-SQLAlchemy) + APScheduler** para enviar
 **SMS (Infobip)** y **email (API esmsv.com)** a bases que salen de una consulta de
 **Google BigQuery** (proyecto `capable-arbor-209819`) o, para SMS, de un Excel.
-Envíos inmediatos o programados (simples o recurrentes), plantillas guardadas,
-listas negras y dashboard de SMS. Código, logs e interfaz en español.
+Envíos inmediatos o programados (simples o recurrentes), plantillas guardadas por
+momento del cliente, listas negras, resumen de lo enviado hoy y dashboard de SMS.
+Código, logs e interfaz en español.
 
 ## Instalar y correr
 
@@ -52,18 +53,38 @@ Llaves de `config.json`:
 `config.json`, `config/google_key.json`, `app.db` y los logs están en `.gitignore`.
 Nunca escriba claves en el código.
 
+## Páginas
+
+| Menú | Ruta | Qué hace |
+|---|---|---|
+| Inicio | `/` | Resumen de hoy: SMS y emails enviados (SmsLog / EmailLog), programaciones de hoy con su estado (ya corrió / pendiente hoy / error, hora, mensajes), enviado por campaña y actividad en vivo. Datos de `/api/inicio/resumen`; si BigQuery falla se ve lo de SQLite y el error. |
+| SMS > Enviar SMS | `/config-sms` | Envío inmediato: consulta o Excel → constructor o mensaje escrito → probar consulta → enviar. |
+| SMS > Programaciones SMS | `/sms/programaciones` | Mismo formulario + *Cuándo se envía* (simple: fecha y hora; recurrente: hora y fecha fin). Debajo, la lista para editar, cancelar, eliminar y reintentar. |
+| SMS > Plantillas SMS | `/config-mensajes` | Mensajes del constructor, cada uno con su **momento**. |
+| SMS > Dashboard SMS | `/dashboards` | Estados de Infobip. |
+| Email > Enviar Email | `/config-email` | Envío inmediato e historial. |
+| Email > Programaciones email | `/email/programaciones` | Mismo formulario con fecha/hora y tipo; debajo, las programaciones para editar o cancelar. |
+| Email > Plantillas email | `/email/plantillas` | Asunto + HTML guardados, cada uno con su **momento**. |
+| Configuración > Parámetros generales | `/config-general` | Parámetros de `config.json`. |
+
+**Momento del cliente**: las plantillas SMS y de email se asignan a un momento
+(ej. *Mora corta*, *Mora larga*, *Cliente al día*, *Acuerdo de pago*). Es texto libre:
+el campo sugiere esos y los ya guardados (`MOMENTOS_SUGERIDOS` en `app.py`). En el
+constructor de SMS se elige el momento y luego el mensaje; en email las plantillas
+salen agrupadas por momento. En las plantillas SMS el momento es obligatorio.
+
 ## Flujo de un envío
 
 1. **Consulta** SQL (solo `SELECT`/`WITH`) o **Excel** (solo SMS).
 2. **Validación en BigQuery** (*dry run*, `consulta_segura.py`); si BigQuery la rechaza, la pantalla muestra su mensaje.
-3. **Mensaje**: con el *Constructor de mensaje* (Plantillas SMS por operador/categoría/tipo) o escrito a mano, con `{{Columna}}`.
+3. **Mensaje**: con el *Constructor de mensaje* (Plantillas SMS por momento del cliente) o escrito a mano, con `{{Columna}}`.
 4. **Acortador**: Infobip acorta los links de los SMS (`urlOptions.shortenUrl`).
 5. **Listas negras** (`listas_negras.py`) y duplicados del día. Si la lista negra no carga, no se envía.
-6. **Enviar ya** o **programar** (simple: fecha y hora; recurrente: todos los días a una hora, hasta una fecha fin).
+6. **Enviar ya** (*Enviar SMS* / *Enviar Email*) o **programar** (*Programaciones SMS* /
+   *Programaciones email*; simple: fecha y hora; recurrente: todos los días a una hora, hasta una fecha fin).
 
-Las programaciones de SMS se ven, editan, cancelan y reintentan en *SMS > Programaciones SMS*;
-las de email en la pestaña *Programados* de *Email > Enviar Email*. Si una ejecución
-falla queda en estado **error** con el mensaje del error.
+Si una ejecución programada falla queda en estado **error** con el mensaje del error
+(se ve en la lista y en Inicio).
 
 ## Listas negras
 
@@ -80,6 +101,7 @@ falla queda en estado **error** con el mensaje del error.
 ## Tablas en BigQuery
 
 - `Temporal.SmsLog` (cada SMS), `Temporal.SmsInfobip` (copia de Infobip para el dashboard), `Temporal.EmailLog`, `Temporal.ProgramacionEmail_Valoro`. Esquemas de SMS en `sms_bigquery_schema.sql`.
+- Inicio cuenta lo de hoy (hora de Colombia) con `campana` y `fecha_envio` de `SmsLog` y `EmailLog`. Una programación de email "ya corrió" si `EmailLog` tiene envíos de hoy con su mismo nombre de campaña (si dos programaciones usan el mismo nombre, se suman). Las de SMS salen de SQLite (`fecha_ejecucion`, `ultimo_enviados`, `ultimo_error`). No hace falta cambiar tablas de BigQuery.
 - Las programaciones de email de Valoro van en su propia tabla `Temporal.ProgramacionEmail_Valoro` (la de QNT es otra, para que una app no envíe las de la otra). Crearla una vez:
 
   ```sql
@@ -100,13 +122,13 @@ falla queda en estado **error** con el mensaje del error.
 |---|---|
 | `app.py` | Rutas web y jobs del scheduler (SMS, email, dashboard SMS). |
 | `backend.py` | Crea la app Flask, la base SQLite, los logs y el scheduler (`America/Bogota`). `APP_NOMBRE` = nombre en la interfaz. |
-| `database.py` | Modelos: `ProgramacionSms`, `MensajeOperacion` (plantillas SMS), `PlantillaEmail`. Columnas nuevas: `_ensure_programacion_sms_columns()`. |
+| `database.py` | Modelos: `ProgramacionSms`, `MensajeOperacion` (plantillas SMS, tabla `Mensajes_`, con `Momento`), `PlantillaEmail` (con `momento`). Columnas nuevas: se agregan solas al arrancar (`_ensure_programacion_sms_columns()`, `_ensure_momento_columns()`). |
 | `services/sms_service.py` | Envío Infobip, variables, lista negra, duplicados, SmsLog, polling de estados. |
-| `services/sms_excel.py`, `services/sms_exclusiones.py` | Base SMS desde Excel; exclusiones del equipo de SMS. |
+| `services/sms_excel.py`, `services/sms_exclusiones.py` | Base SMS desde Excel (links fijos por Id Mensaje en `LINK_POR_ID_MENSAJE`, vacío hasta tener los de Valoro); exclusiones del equipo de SMS. |
 | `services/email_service.py`, `services/email_client.py` | Envío de email (contactos, lista, campaña), lista negra, EmailLog, plantillas. |
 | `dashboard_sms.py`, `infobip_sync.py`, `infobip_logs.py` | Dashboard SMS y copia de los SMS de Infobip a BigQuery. |
 | `bigquery.py`, `conexion_bigquery.py`, `consulta_segura.py` | Lectura de bases en BigQuery, credenciales, validación de consultas. |
 | `listas_negras.py` | Tablas de lista negra. |
 | `general_params.py` | Parámetros generales en `config.json`. |
 | `modo_prueba.py` | Copia de prueba (`APP_COPIA_PRUEBA=1`, otra carpeta, puerto distinto de 5000). |
-| `templates/`, `static/css/valoro.css` | Interfaz (AdminLTE + diseño Valoro). Logo: `static/img/logo-valoro.png`. |
+| `templates/`, `static/css/valoro.css` | Interfaz (AdminLTE + diseño Valoro: barra lateral verde oscuro con el logo, contenido blanco). `config_sms.html` y `config_email.html` sirven a dos páginas cada una (`modo` = `enviar` o `programar`; lo de un solo modo lleva la clase `solo-enviar` / `solo-programar`). La lista de programaciones SMS está en `templates/sms/_lista_programaciones.html`. Logo: `static/img/logo-valoro.png`. |
