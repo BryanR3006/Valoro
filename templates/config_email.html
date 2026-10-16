@@ -666,7 +666,7 @@
   // Campos obligatorios que faltan (mismos nombres que devuelve el servidor).
   function faltantes(p, { conNombre = true, conAsunto = true, conFecha = false } = {}) {
     const faltan = [];
-    if (conNombre && !p.campana) faltan.push('nombre de la campaña');
+    if (conNombre && !p.campana) { faltan.push('nombre de la campaña'); campanaEl.focus(); }
     if (!p.query) faltan.push('consulta SQL');
     if (conAsunto && !p.asunto) faltan.push('asunto');
     if (!p.plantilla) faltan.push('mensaje (contenido HTML)');
@@ -792,6 +792,13 @@
   plantillaSelEl.addEventListener('change', () => {
     const p = plantillasGuardadas.find(x => String(x.id) === plantillaSelEl.value);
     if (!p) { pintarVariables([]); return; }
+    // Sin nombre de campaña (o con uno que puso la app), se llena con el momento y la
+    // fecha; al enviar se le agrega la plantilla (" · Plantilla #id nombre").
+    if (!campanaEl.value.trim() || campanaEl.dataset.auto === '1') {
+      const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+      campanaEl.value = `${p.momento || 'Email'} ${hoy}`;
+      campanaEl.dataset.auto = '1';
+    }
     asuntoEl.value = p.asunto;
     plantillaEl.value = p.html;
     updateCharCounter();
@@ -1077,6 +1084,7 @@
   clearBtn.addEventListener('click', () => {
     queryEl.value = ''; asuntoEl.value = ''; plantillaEl.value = '';
     campanaEl.value = ''; usuarioEl.value = ''; replyEmailEl.value = '';
+    delete campanaEl.dataset.auto;
     confirmarReenvioEl.checked = false; horarioNuevo.poner(null);
     plantillaSelEl.value = ''; pintarVariables([]);
     clearResult(); rowCount.textContent = '0 filas';
@@ -1308,6 +1316,8 @@
   // Event listeners
   document.getElementById('histFiltrarBtn').addEventListener('click', loadHistory);
   plantillaEl.addEventListener('input', updateCharCounter);
+  // Si la persona escribe el nombre, ya no se cambia solo al elegir otra plantilla.
+  campanaEl.addEventListener('input', () => { delete campanaEl.dataset.auto; });
   // ?plantilla=ID (botón "Usar" de la galería de plantillas): queda elegida y cargada.
   const plantillaUrl = new URLSearchParams(location.search).get('plantilla');
   cargarPlantillas().then(() => {
