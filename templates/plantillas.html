@@ -1,12 +1,12 @@
 {% extends "layouts/adminlte.html" %}
-{# Galería de plantillas: todas las de email (miniatura del correo) y SMS (como se ve en
-   el celular), para verlas. Se editan en /email/plantillas y /config-mensajes. Datos de
-   /api/email/plantillas?todas=1 y /api/sms/mensajes. #}
+{# Galería de plantillas de email (miniatura del correo) y SMS (como se ve en el celular),
+   con CRUD: crear, editar, duplicar, activar/desactivar y eliminar. Usa las APIs de
+   cada canal: /api/email/plantillas y /api/sms/mensajes. #}
 
 {% block title %}Plantillas{% endblock %}
 
 {% block page_title %}<h1>Galería de plantillas</h1>{% endblock %}
-{% block page_subtitle %}Todas las plantillas de email y SMS para verlas como le llegan al cliente.{% endblock %}
+{% block page_subtitle %}Todas las plantillas de email y SMS: verlas como le llegan al cliente, crearlas, editarlas, duplicarlas y desactivarlas.{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -32,7 +32,7 @@
     box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; transition: var(--transition);
   }
   .gp-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
-  .gp-card.inactiva { opacity: 0.6; }
+  .gp-card.inactiva .gp-mini, .gp-card.inactiva .gp-celular { opacity: 0.45; }
   .gp-mini { position: relative; height: 340px; overflow: hidden; background: #fff; cursor: zoom-in; border-bottom: 1px solid var(--border); }
   /* Miniatura: el correo a 600 px de ancho, escalado al ancho de la tarjeta; no recibe clics. */
   .gp-mini iframe { border: 0; width: 600px; height: 1600px; transform-origin: 0 0; pointer-events: none; display: block; }
@@ -44,8 +44,8 @@
   .gp-info strong { font-size: 0.9rem; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .gp-info .asunto { font-size: 0.8rem; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .gp-info .meta { font-size: 0.72rem; color: var(--text-muted); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-  .gp-acciones { padding: 10px 14px; border-top: 1px solid var(--border-light); display: flex; gap: 6px; justify-content: flex-end; }
-  .gp-acciones .btn { padding: 4px 10px; font-size: 0.78rem; }
+  .gp-acciones { padding: 10px 14px; border-top: 1px solid var(--border-light); display: flex; gap: 5px; justify-content: flex-end; flex-wrap: wrap; }
+  .gp-acciones .btn { padding: 4px 9px; font-size: 0.78rem; }
 
   /* SMS: burbuja como en el celular */
   .gp-celular { background: #eef1ec; padding: 18px 16px; min-height: 180px; cursor: zoom-in; border-bottom: 1px solid var(--border); }
@@ -71,11 +71,28 @@
   .gp-ver-marco iframe { border: 0; width: 100%; height: 600px; display: block; }
   .gp-ver-sms { padding: 30px; background: #eef1ec; display: flex; justify-content: center; }
   .gp-ver-sms .gp-burbuja { max-width: 380px; font-size: 0.95rem; }
+
+  /* Editor (crear / editar) */
+  #editModal .modal-box { max-width: 1200px; width: 97vw; }
+  .gp-editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+  .gp-editor .sms-field { margin-bottom: 12px; }
+  .gp-editor .fila { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .gp-editor textarea.html { font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 0.78rem; min-height: 380px; }
+  .gp-editor textarea.sms { min-height: 140px; }
+  .gp-editor-vista { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; display: flex; flex-direction: column; min-height: 420px; }
+  .gp-editor-vista .titulo { padding: 8px 12px; font-size: 0.74rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); background: #F8F9FC; border-bottom: 1px solid var(--border); }
+  .gp-editor-vista iframe { border: 0; width: 100%; flex: 1; min-height: 540px; background: #fff; }
+  .gp-editor-vista .gp-ver-sms { flex: 1; align-items: flex-start; }
+  .gp-vars { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  @media (max-width: 900px) { .gp-editor, .gp-editor .fila { grid-template-columns: 1fr; } }
   @media (max-width: 768px) { .gp-barra .der { margin-left: 0; } }
 </style>
 {% endblock %}
 
 {% block content %}
+<div id="smsToastArea"></div>
+<datalist id="listaMomentos">{% for m in momentos %}<option value="{{ m }}">{% endfor %}</datalist>
+
 <div class="gp-barra">
   <div class="gp-tabs">
     <button type="button" data-canal="email" class="activo"><i class="fas fa-envelope"></i> Email <span class="num" id="numEmail"></span></button>
@@ -85,7 +102,7 @@
   <select id="fMomento"><option value="">Todos los momentos</option></select>
   <label><input type="checkbox" id="fInactivas"> Ver inactivas</label>
   <div class="der">
-    <a class="btn btn-outline-secondary btn-sm" id="btnAdministrar" href="/email/plantillas"><i class="fas fa-edit"></i> Administrar</a>
+    <button class="btn btn-primary btn-sm" id="btnNueva"><i class="fas fa-plus"></i> Nueva plantilla</button>
   </div>
 </div>
 
@@ -101,13 +118,99 @@
         <span id="verCuenta"></span>
         <button class="btn btn-outline-secondary btn-sm" id="verNext" title="Siguiente">&rsaquo;</button>
       </span>
-      <button class="modal-close" id="verCerrar">&times;</button>
+      <button class="modal-close" data-cerrar="verModal">&times;</button>
     </div>
     <div class="modal-body">
       <div class="gp-ver-meta" id="verMeta"></div>
       <div id="verCuerpo"></div>
     </div>
     <div class="modal-footer" id="verAcciones"></div>
+  </div>
+</div>
+
+<!-- CREAR / EDITAR -->
+<div class="modal-overlay" id="editModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3><i class="fas fa-edit"></i> <span id="editTitulo">Nueva plantilla</span></h3>
+      <button class="modal-close" data-cerrar="editModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="gp-editor">
+        <div>
+          <!-- Email -->
+          <div class="solo-email">
+            <div class="fila">
+              <div class="sms-field">
+                <label>Nombre <span class="badge-required">requerido</span></label>
+                <input class="form-control" id="eNombre" maxlength="120">
+              </div>
+              <div class="sms-field">
+                <label>Momento del cliente</label>
+                <input class="form-control" id="eMomento" list="listaMomentos" maxlength="100" placeholder="Ej. Primer Momento">
+              </div>
+            </div>
+            <div class="sms-field">
+              <label>Asunto</label>
+              <input class="form-control" id="eAsunto" maxlength="255" placeholder="Hola {{ '{{' }}nombre{{ '}}' }}, ...">
+            </div>
+            <div class="sms-field">
+              <label>Contenido HTML <span class="badge-required">requerido</span></label>
+              <textarea class="form-control html" id="eHtml" spellcheck="false"></textarea>
+              <div class="sms-help"><span>Usa {{ '{{' }}variable{{ '}}' }} con el nombre de la columna de la consulta. Estilos en línea recomendados.</span></div>
+              <div class="gp-vars" id="eVars"></div>
+            </div>
+          </div>
+          <!-- SMS -->
+          <div class="solo-sms">
+            <div class="fila">
+              <div class="sms-field">
+                <label>Momento del cliente <span class="badge-required">requerido</span></label>
+                <input class="form-control" id="sMomento" list="listaMomentos" maxlength="100">
+              </div>
+              <div class="sms-field">
+                <label>Etapa</label>
+                <select class="form-control" id="sEtapa">
+                  <option value="">Sin etapa</option>
+                  {% for e in etapas %}<option value="{{ e }}">Etapa {{ e }}</option>{% endfor %}
+                </select>
+              </div>
+            </div>
+            <div class="fila">
+              <div class="sms-field">
+                <label>ID del mensaje</label>
+                <input class="form-control" id="sIdMensaje" maxlength="100">
+              </div>
+              <div class="sms-field">
+                <label>ID de la campaña</label>
+                <input class="form-control" id="sIdCampana" maxlength="100">
+              </div>
+            </div>
+            <div class="sms-field">
+              <label>Link <small class="text-muted">(va en {{ '{{' }}Link{{ '}}' }}; Infobip lo acorta)</small></label>
+              <input class="form-control" id="sLink" type="url" placeholder="https://...">
+            </div>
+            <div class="sms-field">
+              <label>Mensaje <span class="badge-required">requerido</span></label>
+              <textarea class="form-control sms" id="sMensaje"></textarea>
+              <div class="sms-help"><span id="sLargo">0 caracteres</span></div>
+            </div>
+            <div class="sms-field">
+              <label class="form-check"><input type="checkbox" id="sActiva" checked> Activa (se puede elegir al enviar)</label>
+            </div>
+          </div>
+        </div>
+        <div class="gp-editor-vista">
+          <div class="titulo"><i class="fas fa-eye"></i> Vista previa (en vivo)</div>
+          <iframe class="solo-email" id="eVista" sandbox="" title="Vista previa"></iframe>
+          <div class="gp-ver-sms solo-sms"><div><div class="gp-burbuja" id="sVista"></div><div id="sVistaLargo"></div></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-cerrar="editModal">Cancelar</button>
+      <button class="btn btn-success" id="eGuardar"><i class="fas fa-save"></i> Guardar</button>
+    </div>
   </div>
 </div>
 {% endblock %}
@@ -122,6 +225,31 @@
     if (str === null || str === undefined) return '';
     return String(str).replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
   }
+  function toast(msg, type) {
+    const icons = { success: 'fa-check-circle', danger: 'fa-exclamation-circle', warning: 'fa-exclamation-triangle', info: 'fa-info-circle' };
+    const t = document.createElement('div');
+    t.className = 'sms-toast ' + (type || 'info');
+    t.innerHTML = `<span class="icon"><i class="fas ${icons[type] || icons.info}"></i></span><div class="content"></div>
+      <button class="close-btn">&times;</button>`;
+    t.querySelector('.content').textContent = msg;
+    t.querySelector('.close-btn').addEventListener('click', () => t.remove());
+    $('smsToastArea').appendChild(t);
+    setTimeout(() => t.remove(), 6000);
+  }
+  // Llama una API; si falla lanza Error con el mensaje (y los datos en .data, ej. requiere_nueva).
+  async function api(url, method, body) {
+    const opciones = { method: method || 'GET', headers: { 'Content-Type': 'application/json' } };
+    if (body !== undefined) opciones.body = JSON.stringify(body);
+    const resp = await fetch(url, opciones);
+    let data = {};
+    try { data = await resp.json(); } catch (e) { /* sin JSON */ }
+    if (!resp.ok || data.success === false) {
+      const err = new Error(data.message || `Error HTTP ${resp.status}`);
+      err.data = data; err.status = resp.status;
+      throw err;
+    }
+    return data;
+  }
 
   let canal = 'email';
   let EMAIL = [], SMS = [];
@@ -129,11 +257,13 @@
 
   async function cargar() {
     const [email, sms] = await Promise.allSettled([
-      fetch('/api/email/plantillas?todas=1').then(r => r.json()),
-      fetch('/api/sms/mensajes').then(r => r.json())
+      api('/api/email/plantillas?todas=1'),
+      api('/api/sms/mensajes')
     ]);
-    EMAIL = email.status === 'fulfilled' && email.value.success ? email.value.plantillas : [];
-    SMS = sms.status === 'fulfilled' && sms.value.success ? sms.value.items : [];
+    if (email.status === 'fulfilled') EMAIL = email.value.plantillas || [];
+    else toast('No se pudieron cargar las plantillas de email: ' + email.reason.message, 'danger');
+    if (sms.status === 'fulfilled') SMS = sms.value.items || [];
+    else toast('No se pudieron cargar las plantillas SMS: ' + sms.reason.message, 'danger');
     $('numEmail').textContent = EMAIL.length;
     $('numSms').textContent = SMS.length;
     pintar();
@@ -168,32 +298,40 @@
     return `<div class="gp-largo ${n > 160 ? 'largo' : ''}">${n} caracteres${n > 160 ? ` · ${Math.ceil(n / 153)} partes (se cobra cada una)` : ' · 1 parte'}</div>`;
   }
 
+  // Botones de cada tarjeta (data-accion + data-i).
+  const btn = (accion, i, icono, texto, clase) =>
+    `<button class="btn ${clase || 'btn-outline-secondary'}" data-accion="${accion}" data-i="${i}" title="${texto}"><i class="fas ${icono}"></i>${['ver', 'usar'].includes(accion) ? ' ' + texto : ''}</button>`;
+
   function tarjetaEmail(p, i) {
     return `<div class="gp-card ${p.activa ? '' : 'inactiva'}">
-      <div class="gp-mini ver" data-i="${i}" title="Ver en grande"><iframe sandbox="" loading="lazy" data-i="${i}" title="${esc(p.nombre)}"></iframe></div>
+      <div class="gp-mini" data-accion="ver" data-i="${i}" title="Ver en grande"><iframe sandbox="" loading="lazy" data-i="${i}" title="${esc(p.nombre)}"></iframe></div>
       <div class="gp-info">
         <strong title="${esc(p.nombre)}">${esc(p.nombre)}</strong>
         <span class="asunto" title="${esc(p.asunto)}"><i class="fas fa-envelope"></i> ${esc(p.asunto) || '(Sin asunto)'}</span>
-        <span class="meta"><span class="badge badge-info">${esc(p.momento || 'Sin momento')}</span>
+        <span class="meta"><span class="badge badge-info">${esc(momentoDe(p))}</span>
           ${p.activa ? '' : '<span class="badge badge-secondary">Inactiva</span>'}
           ${p.usos ? `usada ${p.usos} ${p.usos === 1 ? 'vez' : 'veces'}` : 'sin usar'}</span>
       </div>
       <div class="gp-acciones">
-        <button class="btn btn-outline-secondary ver" data-i="${i}"><i class="fas fa-expand"></i> Ver</button>
-        ${p.activa ? `<a class="btn btn-primary" href="/config-email?plantilla=${p.id}"><i class="fas fa-paper-plane"></i> Usar</a>` : ''}
+        ${btn('ver', i, 'fa-expand', 'Ver')}
+        ${btn('editar', i, 'fa-edit', 'Editar', 'btn-outline-primary')}
+        ${btn('duplicar', i, 'fa-copy', 'Duplicar')}
+        ${btn('activa', i, p.activa ? 'fa-eye-slash' : 'fa-eye', p.activa ? 'Desactivar' : 'Activar', 'btn-outline-warning')}
+        ${p.usos ? '' : btn('eliminar', i, 'fa-trash', 'Eliminar', 'btn-outline-danger')}
+        ${p.activa ? `<a class="btn btn-primary" href="/config-email?plantilla=${p.id}" title="Usar para enviar"><i class="fas fa-paper-plane"></i> Usar</a>` : ''}
       </div>
     </div>`;
   }
 
   function tarjetaSms(p, i) {
     return `<div class="gp-card ${p.estado === 1 ? '' : 'inactiva'}">
-      <div class="gp-celular ver" data-i="${i}" title="Ver en grande">
+      <div class="gp-celular" data-accion="ver" data-i="${i}" title="Ver en grande">
         <div class="gp-remitente">SMS</div>
         <div class="gp-burbuja">${textoSms(p.mensaje)}</div>
         ${largoSms(p.mensaje)}
       </div>
       <div class="gp-info">
-        <span class="meta"><span class="badge badge-info">${esc(p.momento || 'Sin momento')}</span>
+        <span class="meta"><span class="badge badge-info">${esc(momentoDe(p))}</span>
           ${p.etapa ? `<span class="badge badge-primary">Etapa ${p.etapa}</span>` : ''}
           ${p.estado === 1 ? '' : '<span class="badge badge-secondary">Inactiva</span>'}</span>
         <span class="meta">ID mensaje: <b>${esc(p.id_mensaje) || '—'}</b></span>
@@ -201,8 +339,12 @@
         ${p.link ? `<span class="meta" title="${esc(p.link)}"><i class="fas fa-link"></i> ${esc(p.link.length > 48 ? p.link.slice(0, 48) + '…' : p.link)}</span>` : ''}
       </div>
       <div class="gp-acciones">
-        <button class="btn btn-outline-secondary ver" data-i="${i}"><i class="fas fa-expand"></i> Ver</button>
-        <button class="btn btn-outline-primary copiar" data-i="${i}"><i class="fas fa-copy"></i> Copiar texto</button>
+        ${btn('ver', i, 'fa-expand', 'Ver')}
+        ${btn('editar', i, 'fa-edit', 'Editar', 'btn-outline-primary')}
+        ${btn('duplicar', i, 'fa-copy', 'Duplicar')}
+        ${btn('activa', i, p.estado === 1 ? 'fa-eye-slash' : 'fa-eye', p.estado === 1 ? 'Desactivar' : 'Activar', 'btn-outline-warning')}
+        ${btn('eliminar', i, 'fa-trash', 'Eliminar', 'btn-outline-danger')}
+        ${btn('copiar', i, 'fa-clipboard', 'Copiar texto')}
       </div>
     </div>`;
   }
@@ -210,19 +352,17 @@
   // Miniatura: el correo a 600 px escalado al ancho de la tarjeta.
   function escalarMiniaturas() {
     document.querySelectorAll('.gp-mini').forEach(caja => {
-      const iframe = caja.querySelector('iframe');
-      iframe.style.transform = `scale(${caja.clientWidth / 600})`;
+      caja.querySelector('iframe').style.transform = `scale(${caja.clientWidth / 600})`;
     });
   }
 
   function pintar() {
     pintarMomentos();
-    $('btnAdministrar').href = canal === 'email' ? '/email/plantillas' : '/config-mensajes';
     visibles = filtrar();
     const total = (canal === 'email' ? EMAIL : SMS).length;
     if (!visibles.length) {
       $('gpLista').innerHTML = `<div class="gp-vacio"><i class="fas fa-inbox"></i><p>${total
-        ? 'Ninguna plantilla con esos filtros.' : `No hay plantillas de ${canal === 'email' ? 'email' : 'SMS'} guardadas.`}</p></div>`;
+        ? 'Ninguna plantilla con esos filtros.' : `No hay plantillas de ${canal === 'email' ? 'email' : 'SMS'}. Crea la primera con "Nueva plantilla".`}</p></div>`;
       return;
     }
     $('gpLista').innerHTML = `<div class="gp-grid">${visibles.map(canal === 'email' ? tarjetaEmail : tarjetaSms).join('')}</div>`;
@@ -230,11 +370,50 @@
       document.querySelectorAll('.gp-mini iframe').forEach(f => { f.srcdoc = visibles[f.dataset.i].html || ''; });
       escalarMiniaturas();
     }
-    document.querySelectorAll('#gpLista .ver').forEach(el => el.addEventListener('click', () => abrir(Number(el.dataset.i))));
-    document.querySelectorAll('#gpLista .copiar').forEach(el => el.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(visibles[el.dataset.i].mensaje || ''); el.innerHTML = '<i class="fas fa-check"></i> Copiado'; }
-      catch (e) { el.textContent = 'No se pudo copiar'; }
-    }));
+    document.querySelectorAll('#gpLista [data-accion]').forEach(el =>
+      el.addEventListener('click', () => accion(el.dataset.accion, visibles[Number(el.dataset.i)], el, Number(el.dataset.i))));
+  }
+
+  // ========== ACCIONES ==========
+  async function accion(que, p, el, i) {
+    if (!p) return;
+    const sms = canal === 'sms';
+    const nombre = sms ? `el SMS de "${momentoDe(p)}"` : `"${p.nombre}"`;
+    try {
+      if (que === 'ver') return abrir(i);
+      if (que === 'editar') return abrirEditor(p);
+      if (que === 'copiar') {
+        await navigator.clipboard.writeText(p.mensaje || '');
+        el.innerHTML = '<i class="fas fa-check"></i>';
+        return;
+      }
+      if (que === 'duplicar') {
+        if (sms) {
+          await api('/api/sms/mensajes', 'POST', { momento: p.momento, etapa: p.etapa, mensaje: p.mensaje,
+            id_mensaje: p.id_mensaje, id_campana: p.id_campana, link: p.link, estado: 0 });
+          toast('SMS duplicado (queda inactivo hasta que lo revises y actives).', 'success');
+        } else {
+          const r = await api(`/api/email/plantillas/${p.id}/duplicar`, 'POST', {});
+          toast(`Plantilla duplicada: "${r.plantilla.nombre}".`, 'success');
+        }
+      }
+      if (que === 'activa') {
+        const activar = !activa(p);
+        if (sms) await api(`/api/sms/mensajes/${p.id}/toggle`, 'POST');
+        else await api(`/api/email/plantillas/${p.id}/activa`, 'POST', { activa: activar });
+        toast(`Plantilla ${activar ? 'activada' : 'desactivada'}.`, 'success');
+        if (!activar && !$('fInactivas').checked) toast('Para verla de nuevo marca "Ver inactivas".', 'info');
+      }
+      if (que === 'eliminar') {
+        if (!confirm(`¿Eliminar ${nombre}? No se puede recuperar.`)) return;
+        await api(sms ? `/api/sms/mensajes/${p.id}` : `/api/email/plantillas/${p.id}`, 'DELETE');
+        toast('Plantilla eliminada.', 'success');
+        cerrar('verModal');
+      }
+      await cargar();
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
   }
 
   // ========== VER EN GRANDE (con ‹ › para pasar entre las plantillas filtradas) ==========
@@ -248,7 +427,7 @@
     if (canal === 'email') {
       $('verTitulo').textContent = p.nombre;
       $('verMeta').innerHTML = `<div><strong>Asunto:</strong> ${esc(p.asunto) || '(Sin asunto)'}</div>
-        <div><strong>Momento:</strong> ${esc(p.momento || 'Sin momento')} · ${p.activa ? 'Activa' : 'Inactiva'} · ${p.usos ? 'usada ' + p.usos + ' veces' : 'sin usar'}</div>
+        <div><strong>Momento:</strong> ${esc(momentoDe(p))} · ${p.activa ? 'Activa' : 'Inactiva'} · ${p.usos ? 'usada ' + p.usos + ' veces' : 'sin usar'}</div>
         ${p.variables && p.variables.length ? `<div><strong>Variables:</strong> ${p.variables.map(v => `<span class="badge badge-secondary">${esc(v)}</span>`).join(' ')}</div>` : ''}`;
       $('verCuerpo').innerHTML = '<div class="gp-ver-marco"><iframe sandbox="allow-same-origin" title="Plantilla en grande"></iframe></div>';
       const iframe = $('verCuerpo').querySelector('iframe');
@@ -258,34 +437,136 @@
         if (doc && doc.documentElement) iframe.style.height = Math.max(400, doc.documentElement.scrollHeight) + 'px';
       };
       iframe.srcdoc = p.html || '';
-      $('verAcciones').innerHTML = `<a class="btn btn-outline-secondary" href="/email/plantillas"><i class="fas fa-edit"></i> Editar</a>
-        ${p.activa ? `<a class="btn btn-primary" href="/config-email?plantilla=${p.id}"><i class="fas fa-paper-plane"></i> Usar para enviar</a>` : ''}`;
     } else {
-      $('verTitulo').textContent = `SMS · ${p.momento || 'Sin momento'}${p.etapa ? ' · Etapa ' + p.etapa : ''}`;
+      $('verTitulo').textContent = `SMS · ${momentoDe(p)}${p.etapa ? ' · Etapa ' + p.etapa : ''}`;
       $('verMeta').innerHTML = `<div><strong>ID mensaje:</strong> ${esc(p.id_mensaje) || '—'} · <strong>ID campaña:</strong> ${esc(p.id_campana) || '—'} · ${p.estado === 1 ? 'Activa' : 'Inactiva'}</div>
         ${p.link ? `<div><strong>Link</strong> (va en {{ '{{' }}Link{{ '}}' }}): ${esc(p.link)}</div>` : ''}`;
       $('verCuerpo').innerHTML = `<div class="gp-ver-sms"><div><div class="gp-burbuja">${textoSms(p.mensaje)}</div>${largoSms(p.mensaje)}</div></div>`;
-      $('verAcciones').innerHTML = '<a class="btn btn-outline-secondary" href="/config-mensajes"><i class="fas fa-edit"></i> Editar</a>';
     }
+    $('verAcciones').innerHTML = `<button class="btn btn-outline-primary" id="verEditar"><i class="fas fa-edit"></i> Editar</button>
+      ${canal === 'email' && p.activa ? `<a class="btn btn-primary" href="/config-email?plantilla=${p.id}"><i class="fas fa-paper-plane"></i> Usar para enviar</a>` : ''}`;
+    $('verEditar').addEventListener('click', () => { cerrar('verModal'); abrirEditor(p); });
     $('verModal').classList.add('active');
   }
-  function cerrar() { $('verModal').classList.remove('active'); }
   $('verPrev').addEventListener('click', () => abrir(viendo - 1));
   $('verNext').addEventListener('click', () => abrir(viendo + 1));
-  $('verCerrar').addEventListener('click', cerrar);
-  $('verModal').addEventListener('click', e => { if (e.target.id === 'verModal') cerrar(); });
+
+  // ========== CREAR / EDITAR ==========
+  let editando = null;   // plantilla que se edita; null = nueva
+
+  function mostrarCanalEditor() {
+    document.querySelectorAll('#editModal .solo-email').forEach(el => el.style.display = canal === 'email' ? '' : 'none');
+    document.querySelectorAll('#editModal .solo-sms').forEach(el => el.style.display = canal === 'sms' ? '' : 'none');
+  }
+
+  function abrirEditor(p) {
+    editando = p || null;
+    mostrarCanalEditor();
+    const nuevo = !p;
+    if (canal === 'email') {
+      $('editTitulo').textContent = nuevo ? 'Nueva plantilla de email' : `Editar "${p.nombre}"`;
+      $('eNombre').value = nuevo ? '' : p.nombre;
+      $('eMomento').value = nuevo ? ($('fMomento').value || '') : (p.momento || '');
+      $('eAsunto').value = nuevo ? '' : (p.asunto || '');
+      $('eHtml').value = nuevo ? '' : (p.html || '');
+    } else {
+      $('editTitulo').textContent = nuevo ? 'Nuevo SMS' : `Editar SMS de "${momentoDe(p)}"`;
+      $('sMomento').value = nuevo ? ($('fMomento').value || '') : (p.momento || '');
+      $('sEtapa').value = nuevo || !p.etapa ? '' : String(p.etapa);
+      $('sIdMensaje').value = nuevo ? '' : (p.id_mensaje || '');
+      $('sIdCampana').value = nuevo ? '' : (p.id_campana || '');
+      $('sLink').value = nuevo ? '' : (p.link || '');
+      $('sMensaje').value = nuevo ? '' : (p.mensaje || '');
+      $('sActiva').checked = nuevo ? true : p.estado === 1;
+    }
+    vistaEditor();
+    $('editModal').classList.add('active');
+  }
+
+  // Vista previa en vivo mientras se escribe.
+  let pausa = null;
+  function vistaEditor() {
+    if (canal === 'email') {
+      clearTimeout(pausa);
+      pausa = setTimeout(() => { $('eVista').srcdoc = $('eHtml').value; }, 300);
+      const vars = [...new Set([...`${$('eAsunto').value} ${$('eHtml').value}`.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)].map(m => m[1]))];
+      $('eVars').innerHTML = vars.length ? '<small class="text-muted">Variables:</small> ' + vars.map(v => `<span class="badge badge-secondary">${esc(v)}</span>`).join('') : '';
+    } else {
+      $('sVista').innerHTML = textoSms($('sMensaje').value) || '<span class="text-muted">(escribe el mensaje)</span>';
+      $('sVistaLargo').innerHTML = largoSms($('sMensaje').value);
+      $('sLargo').textContent = `${$('sMensaje').value.length} caracteres`;
+    }
+  }
+  ['eHtml', 'eAsunto', 'sMensaje'].forEach(id => $(id).addEventListener('input', vistaEditor));
+
+  async function guardarEmail(comoNueva) {
+    const body = { nombre: $('eNombre').value.trim(), momento: $('eMomento').value.trim(),
+                   asunto: $('eAsunto').value.trim(), html: $('eHtml').value.trim() };
+    if (comoNueva) body.como_nueva = true;
+    const faltan = [];
+    if (!body.nombre) faltan.push('nombre');
+    if (!body.html) faltan.push('contenido HTML');
+    if (faltan.length) throw new Error('Faltan datos obligatorios: ' + faltan.join(', '));
+    try {
+      const r = editando
+        ? await api(`/api/email/plantillas/${editando.id}`, 'PUT', body)
+        : await api('/api/email/plantillas', 'POST', body);
+      toast(r.nueva ? `Guardada como plantilla nueva: "${r.plantilla.nombre}".` : 'Plantilla guardada.', 'success');
+    } catch (e) {
+      // Ya se usó y cambió el contenido: se guarda como "<nombre> v2" para no cambiar lo enviado.
+      if (e.status === 409 && e.data && e.data.requiere_nueva) {
+        if (!confirm(`${e.message}\n\nSe guardará como "${e.data.nombre_nueva}".`)) return false;
+        return guardarEmail(true);
+      }
+      throw e;
+    }
+    return true;
+  }
+
+  async function guardarSms() {
+    const body = { momento: $('sMomento').value.trim(), etapa: $('sEtapa').value || null,
+                   id_mensaje: $('sIdMensaje').value.trim(), id_campana: $('sIdCampana').value.trim(),
+                   link: $('sLink').value.trim(), mensaje: $('sMensaje').value.trim(), estado: $('sActiva').checked ? 1 : 0 };
+    const faltan = [];
+    if (!body.momento) faltan.push('momento');
+    if (!body.mensaje) faltan.push('mensaje');
+    if (faltan.length) throw new Error('Faltan datos obligatorios: ' + faltan.join(', '));
+    if (editando) await api(`/api/sms/mensajes/${editando.id}`, 'PUT', body);
+    else await api('/api/sms/mensajes', 'POST', body);
+    toast('Plantilla SMS guardada.', 'success');
+    return true;
+  }
+
+  $('eGuardar').addEventListener('click', async function() {
+    this.disabled = true;
+    try {
+      const listo = canal === 'email' ? await guardarEmail(false) : await guardarSms();
+      if (listo) { cerrar('editModal'); await cargar(); }
+    } catch (e) {
+      toast(e.message, 'danger');
+    } finally {
+      this.disabled = false;
+    }
+  });
+  $('btnNueva').addEventListener('click', () => abrirEditor(null));
+
+  // ========== MODALES Y FILTROS ==========
+  function cerrar(id) { $(id).classList.remove('active'); }
+  document.querySelectorAll('[data-cerrar]').forEach(b => b.addEventListener('click', () => cerrar(b.dataset.cerrar)));
+  ['verModal', 'editModal'].forEach(id => $(id).addEventListener('click', e => { if (e.target.id === id && id === 'verModal') cerrar(id); }));
   document.addEventListener('keydown', e => {
+    if ($('editModal').classList.contains('active')) { if (e.key === 'Escape') cerrar('editModal'); return; }
     if (!$('verModal').classList.contains('active')) return;
-    if (e.key === 'Escape') cerrar();
+    if (e.key === 'Escape') cerrar('verModal');
     if (e.key === 'ArrowLeft' && viendo > 0) abrir(viendo - 1);
     if (e.key === 'ArrowRight' && viendo < visibles.length - 1) abrir(viendo + 1);
   });
 
-  // ========== FILTROS ==========
   document.querySelectorAll('.gp-tabs button').forEach(b => b.addEventListener('click', () => {
     document.querySelectorAll('.gp-tabs button').forEach(x => x.classList.toggle('activo', x === b));
     canal = b.dataset.canal;
     $('fMomento').value = '';
+    history.replaceState(null, '', canal === 'sms' ? '#sms' : location.pathname);
     pintar();
   }));
   $('fBuscar').addEventListener('input', pintar);

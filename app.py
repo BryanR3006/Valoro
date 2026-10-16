@@ -2051,6 +2051,26 @@ def email_plantillas_activa(plantilla_id):
     return jsonify({"success": True, "plantilla": plantilla.a_dict()})
 
 
+@app.route("/api/email/plantillas/<int:plantilla_id>", methods=["DELETE"])
+def email_plantillas_eliminar(plantilla_id):
+    """
+    Borra una plantilla que nunca se usó. Las usadas no se borran (su nombre
+    queda en los envíos y programaciones): se desactivan.
+    """
+    from database import PlantillaEmail
+    plantilla = db.session.get(PlantillaEmail, plantilla_id)
+    if not plantilla:
+        return jsonify({"success": False, "message": "Plantilla no encontrada."}), 404
+    if plantilla.usos:
+        return jsonify({"success": False, "message": f"La plantilla ya se usó en {plantilla.usos} envío(s): "
+                        "no se puede eliminar, desactívela."}), 409
+    nombre = plantilla.nombre
+    db.session.delete(plantilla)
+    db.session.commit()
+    log_activity(f"🗑️ Plantilla de email eliminada (id {plantilla_id}): {nombre}")
+    return jsonify({"success": True, "message": "Plantilla eliminada."})
+
+
 def _plantilla_email_del_envio(data):
     """PlantillaEmail elegida en /config-email (o None)."""
     from database import PlantillaEmail
@@ -2125,8 +2145,8 @@ def programaciones_pagina():
 
 @app.route("/plantillas")
 def plantillas_galeria():
-    """Galería para ver todas las plantillas de email y SMS (se editan en /email/plantillas y /config-mensajes)."""
-    return render_template("plantillas.html")
+    """Galería de plantillas de email y SMS: verlas, crear, editar, duplicar, activar/desactivar y eliminar."""
+    return render_template("plantillas.html", momentos=_momentos(), etapas=ETAPAS_SMS)
 
 
 # ==================== HISTORIAL DE ENVÍOS ====================
