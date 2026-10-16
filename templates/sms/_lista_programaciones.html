@@ -3,30 +3,17 @@
   /* Lista de programaciones SMS (va debajo del formulario en Programaciones SMS) */
   .prog-lista { margin-top: 24px; }
   .prog-lista .card-header { flex-wrap: wrap; gap: 12px; }
-  .prog-lista .card-body { padding: 0; overflow-x: auto; }
-  .prog-lista table { width: 100%; min-width: 1000px; border-collapse: collapse; }
+  .prog-lista .card-body { padding: 16px; }
   .prog-lista .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .prog-lista .filter-bar select {
     border: 1.5px solid var(--border); border-radius: 8px; padding: 6px 12px;
     font-size: 0.8rem; background: #fff; color: var(--text-primary);
-  }
-  .prog-lista .empty-state { text-align: center; padding: 48px 20px; color: var(--text-secondary); }
-  .prog-lista .empty-state i { font-size: 2.6rem; display: block; margin-bottom: 12px; opacity: 0.3; }
-  .prog-lista code.prog-id {
-    color: var(--primary); background: var(--primary-light);
-    padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 700;
   }
   .prog-lista .footer-info {
     padding: 12px 20px; border-top: 1px solid var(--border); display: flex;
     justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.8rem; color: var(--text-secondary);
   }
   .prog-lista .footer-info .total { font-weight: 700; color: var(--primary); }
-  .text-truncate-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
-  /* Mensaje del error de la última ejecución */
-  .prog-error {
-    margin-top: 4px; max-width: 260px; font-size: 0.72rem; color: var(--danger);
-    white-space: normal; word-break: break-word;
-  }
   #editModal .modal-box { max-width: 620px; }
   #editModal .sms-field { margin-bottom: 14px; }
   #editModal .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -85,6 +72,21 @@
         <textarea class="form-control" id="editPlantilla" rows="4" placeholder="Hola {{'{{'}}Nombre Cliente{{'}}'}}, ..."></textarea>
       </div>
 
+      <div class="form-row">
+        <div class="sms-field">
+          <label>ID del mensaje</label>
+          <input type="text" class="form-control" id="editIdMensaje" maxlength="100" placeholder="Ej: MC01">
+        </div>
+        <div class="sms-field">
+          <label>ID de la campaña</label>
+          <input type="text" class="form-control" id="editIdCampana" maxlength="100" placeholder="Ej: CAMP-2026-10">
+        </div>
+      </div>
+      <div class="sms-field">
+        <label>Link <small class="text-muted">(va en {{ '{{' }}Link{{ '}}' }} para todos)</small></label>
+        <input type="url" class="form-control" id="editLink" placeholder="https://...">
+      </div>
+
       <div class="form-row" id="editFilaSimple">
         <div class="sms-field">
           <label>Fecha y hora de envío <span class="badge-required">requerido</span></label>
@@ -101,7 +103,16 @@
           <label>Fecha fin (opcional)</label>
           <input type="date" class="form-control" id="editFechaFin">
         </div>
+        <div class="sms-field">
+          <label>Repetir en el día</label>
+          <select class="form-control" id="editIntervalo"></select>
+        </div>
+        <div class="sms-field" id="editHoraFinCampo">
+          <label>Hasta las</label>
+          <input type="time" class="form-control" id="editHoraFin">
+        </div>
       </div>
+      <div class="sms-help" id="editTurnos" style="display:none;margin-bottom:12px;"></div>
 
       <div class="form-row">
         <div class="sms-field">
@@ -149,6 +160,7 @@
       </div>
     </div>
     <div class="card-body" id="progListaContainer">
+      <div class="prog-resumen" id="progResumen"></div>
       <div id="progLista">
         <div class="text-center text-muted py-5">
           <i class="fas fa-spinner fa-spin" style="font-size:2rem;"></i>
@@ -197,8 +209,28 @@
     const recurrente = document.getElementById('editTipo').value === 'recurrente';
     document.getElementById('editFilaSimple').style.display = recurrente ? 'none' : '';
     document.getElementById('editFilaRecurrente').style.display = recurrente ? '' : 'none';
+    mostrarTurnosEdicion();
   }
   document.getElementById('editTipo').addEventListener('change', mostrarCamposTipo);
+
+  // Repetir en el día: "Hasta las" y las horas en que saldrá.
+  ValoroHorarios.llenarSelect(document.getElementById('editIntervalo'));
+  function mostrarTurnosEdicion() {
+    const recurrente = document.getElementById('editTipo').value === 'recurrente';
+    const intervalo = document.getElementById('editIntervalo').value;
+    document.getElementById('editHoraFinCampo').style.display = intervalo ? '' : 'none';
+    const caja = document.getElementById('editTurnos');
+    caja.style.display = recurrente ? '' : 'none';
+    const horas = ValoroHorarios.horasDelDia(document.getElementById('editHoraInicio').value, intervalo,
+                                             document.getElementById('editHoraFin').value);
+    caja.innerHTML = horas.length
+      ? `<span><i class="far fa-clock"></i> Sale a las: ${horas.join(', ')}</span>`
+      : '<span style="color:#B42318;"><i class="fas fa-exclamation-circle"></i> "Hasta las" debe ser después de la hora de envío.</span>';
+  }
+  ['editIntervalo', 'editHoraFin', 'editHoraInicio'].forEach(id => {
+    document.getElementById(id).addEventListener('input', mostrarTurnosEdicion);
+    document.getElementById(id).addEventListener('change', mostrarTurnosEdicion);
+  });
 
   // Constructor: plantillas SMS activas (Plantillas SMS).
   let mensajesGuardados = [];
@@ -209,12 +241,17 @@
       mensajesGuardados = data.items || [];
       document.getElementById('editMensajeGuardado').innerHTML =
         '<option value="">-- Elegir por momento del cliente --</option>' +
-        mensajesGuardados.map(m => `<option value="${m.id}">${esc(m.momento || 'Sin momento')} · ${esc((m.mensaje || '').substring(0, 60))}</option>`).join('');
+        mensajesGuardados.map(m => `<option value="${m.id}">${esc(m.momento || 'Sin momento')}${m.etapa ? ' · Etapa ' + m.etapa : ''} · ${esc((m.mensaje || '').substring(0, 60))}</option>`).join('');
     } catch (e) { /* sin plantillas: se escribe el mensaje a mano */ }
   }
   document.getElementById('editMensajeGuardado').addEventListener('change', function() {
     const m = mensajesGuardados.find(x => String(x.id) === this.value);
-    if (m) document.getElementById('editPlantilla').value = m.mensaje || '';
+    if (m) {
+      document.getElementById('editPlantilla').value = m.mensaje || '';
+      document.getElementById('editIdMensaje').value = m.id_mensaje || '';
+      document.getElementById('editIdCampana').value = m.id_campana || '';
+      document.getElementById('editLink').value = m.link || '';
+    }
   });
 
   function openModal(data) {
@@ -230,8 +267,13 @@
     document.getElementById('editExcelAviso').style.display = esExcel ? '' : 'none';
     document.getElementById('editPlantilla').value     = data.plantilla || '';
     document.getElementById('editMensajeGuardado').value = '';
+    document.getElementById('editIdMensaje').value     = data.id_mensaje || '';
+    document.getElementById('editIdCampana').value     = data.id_campana || '';
+    document.getElementById('editLink').value          = data.link || '';
     document.getElementById('editHoraInicio').value    = data.hora_inicio || '';
     document.getElementById('editFechaFin').value      = data.fecha_fin || '';
+    document.getElementById('editIntervalo').value     = data.intervalo_minutos ? String(data.intervalo_minutos) : '';
+    document.getElementById('editHoraFin').value       = data.hora_fin || '18:30';
     document.getElementById('editConfirmarReenvio').value   = data.confirmar_reenvio ? 'true' : 'false';
     // fecha_programada viene en hora de Colombia, sin zona: se muestra tal cual.
     document.getElementById('editFechaProgramada').value = data.fecha_programada ? data.fecha_programada.slice(0, 16) : '';
@@ -262,8 +304,13 @@
       tipo_programacion: tipo,
       usuario: document.getElementById('editUsuario').value.trim(),
       plantilla: document.getElementById('editPlantilla').value.trim(),
+      id_mensaje: document.getElementById('editIdMensaje').value.trim(),
+      id_campana: document.getElementById('editIdCampana').value.trim(),
+      link: document.getElementById('editLink').value.trim(),
       hora_inicio: document.getElementById('editHoraInicio').value || null,
       fecha_fin: document.getElementById('editFechaFin').value || null,
+      intervalo_minutos: Number(document.getElementById('editIntervalo').value) || null,
+      hora_fin: document.getElementById('editIntervalo').value ? (document.getElementById('editHoraFin').value || null) : null,
       confirmar_reenvio: document.getElementById('editConfirmarReenvio').value === 'true',
       fecha_programada: fechaProgramada || null
     };
@@ -276,6 +323,7 @@
     if (!data.plantilla) faltan.push('mensaje');
     if (tipo === 'simple' && !data.fecha_programada) faltan.push('fecha y hora de envío');
     if (tipo === 'recurrente' && !data.hora_inicio) faltan.push('hora de envío');
+    if (tipo === 'recurrente' && data.intervalo_minutos && !data.hora_fin) faltan.push('hasta qué hora (Hasta las)');
     if (faltan.length) {
       showToast('⚠️ Faltan datos obligatorios: ' + faltan.join(', '), 'warning');
       return;
@@ -324,14 +372,85 @@
     catch (e) { return iso; }
   }
 
+  // Estados de la lista: etiqueta, icono y color del badge.
+  const ESTADOS = {
+    pendiente:  ['Pendiente',  'fa-hourglass-half',       'warning'],
+    enviado:    ['Enviado',    'fa-check-circle',         'success'],
+    completado: ['Completado', 'fa-check-double',         'success'],
+    error:      ['Error',      'fa-exclamation-triangle', 'danger'],
+    fallido:    ['Fallido',    'fa-times-circle',         'danger'],
+    cancelado:  ['Cancelado',  'fa-ban',                  'secondary']
+  };
+  function badgeEstado(estado) {
+    const [txt, icono, color] = ESTADOS[estado] || [estado || '?', 'fa-question', 'secondary'];
+    return `<span class="badge badge-${color}"><i class="fas ${icono}"></i> ${esc(txt)}</span>`;
+  }
+
+  // Cuándo sale: simple = fecha y hora; recurrente = todos los días a la hora (hasta fecha fin).
+  function htmlCuando(prog) {
+    if (prog.tipo_programacion === 'recurrente') {
+      return `<i class="fas fa-sync-alt"></i><div>
+        <div class="principal">${esc(ValoroHorarios.texto(prog.hora_inicio, prog.intervalo_minutos, prog.hora_fin))}</div>
+        <div class="secundario">${prog.fecha_fin ? 'Hasta el ' + esc(prog.fecha_fin) : 'Sin fecha de fin'}</div></div>`;
+    }
+    return `<i class="far fa-calendar-alt"></i><div>
+      <div class="principal">${fmtFecha(prog.fecha_programada)}</div>
+      <div class="secundario">Una sola vez</div></div>`;
+  }
+
+  function htmlTarjeta(prog) {
+    const puedeEliminar   = ['pendiente','completado','fallido','error','cancelado'].includes(prog.estado);
+    const puedeReintentar = ['fallido','error','cancelado'].includes(prog.estado);
+    const tipoBadge = prog.tipo_programacion === 'recurrente'
+      ? '<span class="badge badge-info"><i class="fas fa-sync-alt"></i> Diaria</span>'
+      : '<span class="badge badge-primary"><i class="fas fa-clock"></i> Simple</span>';
+    const origen = prog.origen === 'excel' ? ' · <i class="fas fa-file-excel"></i> Excel' : '';
+    return `
+      <div class="prog-card est-${esc(prog.estado)}">
+        <div class="prog-card-head">
+          <div class="prog-card-titulo">
+            <strong title="${esc(prog.campana)}">${esc(prog.campana) || 'Sin nombre'}</strong>
+            <small>#${prog.id} · ${esc(prog.usuario) || 'Sin responsable'}${origen}</small>
+            ${prog.id_mensaje || prog.id_campana ? `<small style="display:block;">ID mensaje: <b>${esc(prog.id_mensaje) || '—'}</b> · ID campaña: <b>${esc(prog.id_campana) || '—'}</b></small>` : ''}
+          </div>
+          <div class="prog-card-badges">${tipoBadge}${badgeEstado(prog.estado)}</div>
+        </div>
+        <div class="prog-cuando">${htmlCuando(prog)}</div>
+        ${prog.plantilla ? `<div class="prog-mensaje" title="${esc(prog.plantilla)}"><i class="fas fa-comment-alt"></i> ${esc(prog.plantilla)}</div>` : ''}
+        <div class="prog-datos">
+          <div class="prog-dato"><b>${prog.total_destinatarios || 0}</b>Destinatarios</div>
+          <div class="prog-dato"><b>${prog.ultimo_enviados ?? '—'}</b>Enviados</div>
+          <div class="prog-dato"><b>${prog.fecha_ejecucion ? fmtFecha(prog.fecha_ejecucion + 'Z') : '—'}</b>Última ejecución</div>
+        </div>
+        ${prog.ultimo_error ? `<div class="prog-error"><i class="fas fa-exclamation-circle"></i> ${esc(prog.ultimo_error)}</div>` : ''}
+        <div class="prog-card-acciones">
+          <button class="btn btn-outline-primary btn-sm editar-prog" data-id="${prog.id}"><i class="fas fa-edit"></i> Editar</button>
+          ${puedeReintentar ? `<button class="btn btn-outline-success btn-sm reejecutar-prog" data-id="${prog.id}"><i class="fas fa-redo-alt"></i> Reintentar</button>` : ''}
+          ${puedeEliminar ? `<button class="btn btn-outline-danger btn-sm eliminar-prog" data-id="${prog.id}"><i class="fas fa-trash"></i> Eliminar</button>` : ''}
+        </div>
+      </div>`;
+  }
+
+  // Chips con el total por estado; al hacer clic filtran la lista.
+  function pintarResumen(todas) {
+    const filtroEl = document.getElementById('filtroEstadoProg');
+    const conteo = {};
+    todas.forEach(p => { conteo[p.estado] = (conteo[p.estado] || 0) + 1; });
+    const chip = (valor, texto, n) =>
+      `<button type="button" class="prog-chip ${filtroEl.value === valor ? 'activo' : ''}" data-estado="${valor}">${texto} <span class="num">${n}</span></button>`;
+    document.getElementById('progResumen').innerHTML = chip('', 'Todas', todas.length) +
+      Object.keys(ESTADOS).filter(e => conteo[e]).map(e => chip(e, ESTADOS[e][0], conteo[e])).join('');
+    document.querySelectorAll('#progResumen .prog-chip').forEach(btn => {
+      btn.addEventListener('click', () => { filtroEl.value = btn.dataset.estado; pintarLista(); });
+    });
+  }
+
   // ========== CARGAR PROGRAMACIONES ==========
+  // Se traen todas y se filtran aquí, para que el resumen cuente todas.
+  let todasProg = [];
   async function cargarProgramaciones() {
     const container = document.getElementById('progLista');
     if (!container) return;
-
-    const estado = document.getElementById('filtroEstadoProg')?.value || '';
-    const tipo   = document.getElementById('filtroTipoProg')?.value || '';
-
     container.innerHTML = `
       <div class="text-center text-muted py-5">
         <i class="fas fa-spinner fa-spin" style="font-size:2rem;"></i>
@@ -339,169 +458,102 @@
       </div>
     `;
     document.getElementById('footerInfo').style.display = 'none';
-
     try {
-      let url = '/api/sms/programaciones';
-      const params = new URLSearchParams();
-      if (estado) params.append('estado', estado);
-      if (tipo) params.append('tipo_programacion', tipo);
-      if (params.toString()) url += '?' + params.toString();
-
-      const resp = await fetch(url);
+      const resp = await fetch('/api/sms/programaciones');
       const data = await resp.json();
-
-      const rows = data.data || data.items || [];
-      if (!data.success || !rows || rows.length === 0) {
-        container.innerHTML = `
-          <div class="empty-state">
-            <i class="fas fa-inbox"></i>
-            <p>No hay programaciones. Crea la primera con el formulario de arriba.</p>
-          </div>
-        `;
-        document.getElementById('footerInfo').style.display = 'none';
-        return;
-      }
-
-      document.getElementById('footerInfo').style.display = 'flex';
-      document.getElementById('totalCount').textContent = rows.length;
+      if (!data.success) throw new Error(data.error || data.message || 'Error al cargar');
+      todasProg = data.data || data.items || [];
       document.getElementById('updateTime').textContent = new Date().toLocaleString('es-CO');
-
-      let html = `
-        <table class="table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Campaña</th>
-              <th>Usuario</th>
-              <th>Tipo</th>
-              <th>Fecha Prog.</th>
-              <th>Hora Inicio</th>
-              <th>Fecha Fin</th>
-              <th>Últ. Ejecución</th>
-              <th>Dest.</th>
-              <th>Enviados</th>
-              <th>Estado</th>
-              <th style="text-align:center;">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-      `;
-
-      rows.forEach(prog => {
-        const tipoBadge = prog.tipo_programacion === 'recurrente'
-          ? '<span class="badge badge-info"><i class="fas fa-sync-alt"></i> Recurrente</span>'
-          : '<span class="badge badge-success"><i class="fas fa-clock"></i> Simple</span>';
-
-        const estadoMap = {
-          'pendiente':  '<span class="badge badge-warning"><i class="fas fa-hourglass-half"></i> Pendiente</span>',
-          'enviado':    '<span class="badge badge-success"><i class="fas fa-check-circle"></i> Enviado</span>',
-          'completado': '<span class="badge badge-success"><i class="fas fa-check-double"></i> Completado</span>',
-          'fallido':    '<span class="badge badge-danger"><i class="fas fa-times-circle"></i> Fallido</span>',
-          'error':      '<span class="badge badge-danger"><i class="fas fa-exclamation-triangle"></i> Error</span>',
-          'cancelado':  '<span class="badge badge-secondary"><i class="fas fa-ban"></i> Cancelado</span>'
-        };
-        // Si la ejecución falló, el mensaje del error queda debajo del estado.
-        const estadoHtml = (estadoMap[prog.estado] || `<span class="badge badge-secondary">${esc(prog.estado)}</span>`) +
-          (prog.ultimo_error ? `<div class="prog-error" title="${esc(prog.ultimo_error)}">${esc(prog.ultimo_error)}</div>` : '');
-
-        const puedeEliminar   = ['pendiente','completado','fallido','error','cancelado'].includes(prog.estado);
-        const puedeReintentar = ['fallido','error','cancelado'].includes(prog.estado);
-
-        html += `
-          <tr>
-            <td><code class="prog-id">#${prog.id}</code></td>
-            <td><strong class="text-truncate-cell" title="${esc(prog.campana)}">${esc(prog.campana) || '—'}</strong></td>
-            <td>${esc(prog.usuario) || '—'}</td>
-            <td>${tipoBadge}</td>
-            <td>${fmtFecha(prog.fecha_programada)}</td>
-            <td>${esc(prog.hora_inicio) || '—'}</td>
-            <td>${esc(prog.fecha_fin) || '—'}</td>
-            <td>${fmtFecha(prog.fecha_ejecucion ? prog.fecha_ejecucion + 'Z' : null)}</td>
-            <td>${prog.total_destinatarios || 0}</td>
-            <td>${prog.ultimo_enviados ?? '—'}</td>
-            <td>${estadoHtml}</td>
-            <td style="text-align:center;">
-              <div class="btn-group" role="group" style="display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:center;">
-                <button class="btn btn-outline-primary btn-sm editar-prog" data-id="${prog.id}" title="Editar">
-                  <i class="fas fa-edit"></i>
-                </button>
-                ${puedeEliminar ? `<button class="btn btn-outline-danger btn-sm eliminar-prog" data-id="${prog.id}" title="Eliminar"><i class="fas fa-trash"></i></button>` : ''}
-                ${puedeReintentar ? `<button class="btn btn-outline-success btn-sm reejecutar-prog" data-id="${prog.id}" title="Reintentar"><i class="fas fa-redo-alt"></i></button>` : ''}
-              </div>
-            </td>
-          </tr>
-        `;
-      });
-
-      html += `</tbody></table>`;
-      container.innerHTML = html;
-
-      // ========== EVENTOS ==========
-      // Editar
-      container.querySelectorAll('.editar-prog').forEach(btn => {
-        btn.addEventListener('click', function() {
-          const id = this.dataset.id;
-          const prog = rows.find(p => String(p.id) === String(id));
-          if (prog) openModal(prog);
-        });
-      });
-
-      // Eliminar
-      container.querySelectorAll('.eliminar-prog').forEach(btn => {
-        btn.addEventListener('click', async function(e) {
-          e.stopPropagation();
-          const id = this.dataset.id;
-          if (!confirm(`¿Eliminar permanentemente la programación #${id}?`)) return;
-
-          try {
-            const resp = await fetch(`/api/sms/programaciones/${id}`, { method: 'DELETE' });
-            const data = await resp.json();
-            if (data.success) {
-              showToast('✅ Programación eliminada', 'success');
-              cargarProgramaciones();
-            } else {
-              showToast('❌ ' + (data.error || 'Error'), 'danger');
-            }
-          } catch (e) {
-            showToast('❌ Error: ' + e.message, 'danger');
-          }
-        });
-      });
-
-      // Reintentar
-      container.querySelectorAll('.reejecutar-prog').forEach(btn => {
-        btn.addEventListener('click', async function(e) {
-          e.stopPropagation();
-          const id = this.dataset.id;
-          if (!confirm(`¿Reintentar la programación #${id}?`)) return;
-
-          try {
-            const resp = await fetch(`/api/sms/programaciones/${id}/reejecutar`, { method: 'POST' });
-            const data = await resp.json();
-            if (data.success) {
-              showToast('✅ Reintento programado', 'success');
-              cargarProgramaciones();
-            } else {
-              showToast('❌ ' + (data.error || 'Error'), 'danger');
-            }
-          } catch (e) {
-            showToast('❌ Error: ' + e.message, 'danger');
-          }
-        });
-      });
-
+      pintarLista();
     } catch (e) {
+      document.getElementById('progResumen').innerHTML = '';
       container.innerHTML = `
         <div class="alert alert-danger m-3" style="border-radius:8px;">
-          <i class="fas fa-exclamation-triangle"></i> Error al cargar: ${e.message}
+          <i class="fas fa-exclamation-triangle"></i> Error al cargar: ${esc(e.message)}
         </div>
       `;
     }
   }
 
+  function pintarLista() {
+    const container = document.getElementById('progLista');
+    const estado = document.getElementById('filtroEstadoProg').value;
+    const tipo   = document.getElementById('filtroTipoProg').value;
+    pintarResumen(todasProg);
+    const rows = todasProg.filter(p => (!estado || p.estado === estado) && (!tipo || p.tipo_programacion === tipo));
+
+    if (!rows.length) {
+      container.innerHTML = `
+        <div class="prog-vacio">
+          <i class="fas fa-inbox"></i>
+          <p>${todasProg.length ? 'Ninguna programación con esos filtros.' : 'No hay programaciones. Crea la primera con el formulario de arriba.'}</p>
+        </div>
+      `;
+      document.getElementById('footerInfo').style.display = 'none';
+      return;
+    }
+    document.getElementById('footerInfo').style.display = 'flex';
+    document.getElementById('totalCount').textContent = rows.length;
+    container.innerHTML = `<div class="prog-grid">${rows.map(htmlTarjeta).join('')}</div>`;
+
+    // ========== EVENTOS ==========
+    // Editar
+    container.querySelectorAll('.editar-prog').forEach(btn => {
+      btn.addEventListener('click', function() {
+        const id = this.dataset.id;
+        const prog = rows.find(p => String(p.id) === String(id));
+        if (prog) openModal(prog);
+      });
+    });
+
+    // Eliminar
+    container.querySelectorAll('.eliminar-prog').forEach(btn => {
+      btn.addEventListener('click', async function(e) {
+        e.stopPropagation();
+        const id = this.dataset.id;
+        if (!confirm(`¿Eliminar permanentemente la programación #${id}?`)) return;
+
+        try {
+          const resp = await fetch(`/api/sms/programaciones/${id}`, { method: 'DELETE' });
+          const data = await resp.json();
+          if (data.success) {
+            showToast('✅ Programación eliminada', 'success');
+            cargarProgramaciones();
+          } else {
+            showToast('❌ ' + (data.error || 'Error'), 'danger');
+          }
+        } catch (e) {
+          showToast('❌ Error: ' + e.message, 'danger');
+        }
+      });
+    });
+
+    // Reintentar
+    container.querySelectorAll('.reejecutar-prog').forEach(btn => {
+      btn.addEventListener('click', async function(e) {
+        e.stopPropagation();
+        const id = this.dataset.id;
+        if (!confirm(`¿Reintentar la programación #${id}?`)) return;
+
+        try {
+          const resp = await fetch(`/api/sms/programaciones/${id}/reejecutar`, { method: 'POST' });
+          const data = await resp.json();
+          if (data.success) {
+            showToast('✅ Reintento programado', 'success');
+            cargarProgramaciones();
+          } else {
+            showToast('❌ ' + (data.error || 'Error'), 'danger');
+          }
+        } catch (e) {
+          showToast('❌ Error: ' + e.message, 'danger');
+        }
+      });
+    });
+  }
+
   // ========== FILTROS ==========
-  document.getElementById('filtroEstadoProg')?.addEventListener('change', cargarProgramaciones);
-  document.getElementById('filtroTipoProg')?.addEventListener('change', cargarProgramaciones);
+  document.getElementById('filtroEstadoProg')?.addEventListener('change', pintarLista);
+  document.getElementById('filtroTipoProg')?.addEventListener('change', pintarLista);
   document.getElementById('btnRefrescarProg')?.addEventListener('click', cargarProgramaciones);
 
   // ========== CARGAR AL INICIAR ==========

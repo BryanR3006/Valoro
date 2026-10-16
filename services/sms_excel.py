@@ -162,6 +162,21 @@ def link_por_id_mensaje(id_mensaje) -> str:
     return ""
 
 
+def aplicar_link_mensaje(filas, link) -> int:
+    """
+    Link del mensaje (constructor / plantilla SMS) en todas las filas: reemplaza
+    el Link que traiga la consulta o el Excel, así {{Link}} no depende de la base.
+    Sin link no cambia nada. Modifica las filas y devuelve cuántas cambió.
+    """
+    link = (link or "").strip()
+    if not link:
+        return 0
+    for fila in filas:
+        columnas = {_clave(k): k for k in fila}
+        fila[columnas.get("link", "Link")] = link
+    return len(filas)
+
+
 def aplicar_link_whatsapp(filas, link, id_mensaje_pantalla="") -> int:
     """
     Link de WhatsApp (cambia cada día, se escribe con la campaña en pantalla)

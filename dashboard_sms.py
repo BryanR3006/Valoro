@@ -141,7 +141,7 @@ def obtener_dashboard(client, horas=None, desde=None, hasta=None, campana="") ->
 
 
 # ==================== FUENTE: SMS DE INFOBIP EN BIGQUERY ====================
-# Todos los SMS de la cuenta, copiados de Infobip a Temporal.SmsInfobip por
+# Todos los SMS de la cuenta, copiados de Infobip a Temporal.SmsInfobip_Valoro por
 # infobip_sync.py (job sms_infobip_sync). El dashboard lee la tabla: abre en
 # segundos, sirve para cualquier rango y guarda historia (Infobip solo ~2 días).
 # Se cruzan con SmsLog por bulk_id para campaña y usuario ("desde la app").
@@ -253,7 +253,7 @@ def _cerrar_infobip(fila):
 
 
 def obtener_dashboard_infobip(client, periodo="hoy", desde=None, hasta=None, campana=""):
-    """Totales, lotes, horas, días, operadores y errores desde Temporal.SmsInfobip."""
+    """Totales, lotes, horas, días, operadores y errores desde Temporal.SmsInfobip_Valoro."""
     ini, fin = periodo_infobip(periodo, desde, hasta)
     clave = (ini.strftime("%Y%m%d%H%M"), fin.strftime("%Y%m%d%H%M")[:-1], campana or "")
     guardado = _agregado.get(clave)

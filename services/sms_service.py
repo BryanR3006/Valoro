@@ -157,6 +157,36 @@ def remover_tildes(texto: str) -> str:
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
 
 
+# Columnas del reporte donde van los IDs del constructor.
+COLUMNA_ID_MENSAJE = "Id Mensaje"
+COLUMNA_ID_CAMPANA = "Id Campaña"
+
+
+def _clave_columna(nombre) -> str:
+    """'Id Campaña', 'id_campana' e 'ID CAMPANA' dan la misma clave: idcampana."""
+    return re.sub(r"[^a-z0-9]", "", remover_tildes(str(nombre)).lower())
+
+
+def ids_en_callback(datos: Dict, id_mensaje: str = "", id_campana: str = "") -> Dict:
+    """
+    Pone los IDs del constructor en las columnas 'Id Mensaje' / 'Id Campaña'
+    del callbackData, en lugar de los que trae la consulta (o el Excel), para
+    que el reporte de Infobip muestre los asignados en pantalla. Quita las
+    otras formas del mismo nombre (id_mensaje, ID MENSAJE…) para no repetir
+    columnas. Van primero: si el texto se recorta a 4000 caracteres no se pierden.
+    Sin ID en pantalla la fila queda como viene.
+    """
+    ids = {}
+    if str(id_campana or "").strip():
+        ids[COLUMNA_ID_CAMPANA] = str(id_campana).strip()
+    if str(id_mensaje or "").strip():
+        ids[COLUMNA_ID_MENSAJE] = str(id_mensaje).strip()
+    if not ids:
+        return datos
+    claves = {_clave_columna(c) for c in ids}
+    return {**ids, **{k: v for k, v in datos.items() if _clave_columna(k) not in claves}}
+
+
 def validar_variables(rows: List[Dict], variables: List[str]) -> Tuple[List[str], Dict[str, int]]:
     """Valida que las variables existan en los datos y cuenta valores vacíos."""
     if not rows:
@@ -243,7 +273,7 @@ def senuelos_configurados() -> List[Dict]:
     return [s for s in senuelos if isinstance(s, dict) and str(s.get("telefono") or "").strip()]
 
 
-def preparar_sms(rows: List[Dict], plantilla: str) -> Tuple[List[Dict], Dict]:
+def preparar_sms(rows: List[Dict], plantilla: str, link: str = "") -> Tuple[List[Dict], Dict]:
     """
     Prepara los mensajes: valida números, detecta columnas, reemplaza variables.
     Retorna lista de mensajes preparados y diccionario con detalles.
@@ -251,15 +281,11 @@ def preparar_sms(rows: List[Dict], plantilla: str) -> Tuple[List[Dict], Dict]:
     if not plantilla or not plantilla.strip():
         raise SmsServiceError("La plantilla del SMS es obligatoria.")
     
-    phone_column = detectar_columna_telefono(rows)
+    # Consulta vacía: no es error (una recurrente puede no tener a quién enviar en un turno).
+    phone_column = detectar_columna_telefono(rows) if rows else None
+    # Las variables son opcionales: un mensaje fijo (sin {{...}}) se envía igual a todos.
     variables = extraer_variables(plantilla)
-    
-    if not variables:
-        raise SmsServiceError(
-            "La plantilla no contiene variables ({{Nombre Cliente}}, {{Valor Oferta Esp 2}}, etc.). "
-            "Agregue al menos una variable para personalizar los mensajes."
-        )
-    
+
     missing, empty_variables = validar_variables(rows, variables)
     
     if missing:
@@ -281,18 +307,23 @@ def preparar_sms(rows: List[Dict], plantilla: str) -> Tuple[List[Dict], Dict]:
     invalid_numbers = 0
 
     # Señuelos: números de control que reciben cada envío (config.json → infobip.senuelos).
+    # Van marcados: nunca se excluyen (lista negra ni duplicados del día).
     for senuelo in senuelos_configurados():
         telefono = str(senuelo["telefono"]).strip()
         row = {
             "Nombre Cliente": senuelo.get("nombre", ""),
-            "Link": senuelo.get("link", ""),
+            # Con link del mensaje, el señuelo recibe el mismo que los clientes.
+            "Link": (link or "").strip() or senuelo.get("link", ""),
             "telefono": telefono
         }
         prepared.append({
             "phone": telefono,
             "text": construir_mensaje(row, plantilla, variables),
-            "row": row
+            "row": row,
+            "senuelo": True
         })
+        # Si la base trae el mismo número, le llega una sola vez (la del señuelo).
+        seen.add(limpiar_numero(telefono) or telefono)
     for row in rows:
             phone = limpiar_numero(row.get(phone_column))
             if not phone:
@@ -312,7 +343,7 @@ def preparar_sms(rows: List[Dict], plantilla: str) -> Tuple[List[Dict], Dict]:
     return prepared, {
             "phone_column": phone_column,
             "invalid_numbers": invalid_numbers,
-            "duplicates": len(rows) - invalid_numbers - len(prepared),
+            "duplicates": len(rows) - invalid_numbers - sum(1 for i in prepared if not i.get("senuelo")),
             "empty_variables": empty_variables,
             "total_validos": len(prepared),
             "total_filas": total_filas,
@@ -320,11 +351,11 @@ def preparar_sms(rows: List[Dict], plantilla: str) -> Tuple[List[Dict], Dict]:
         }
 
 
-def preview_sms(rows: List[Dict], plantilla: str, limit: int = 3) -> Dict:
+def preview_sms(rows: List[Dict], plantilla: str, limit: int = 3, link: str = "") -> Dict:
     """Genera una vista previa sin enviar."""
     try:
-        prepared, details = preparar_sms(rows, plantilla)
-        
+        prepared, details = preparar_sms(rows, plantilla, link)
+
         preview_items = []
         for item in prepared[:limit]:
             preview_items.append({
@@ -360,10 +391,15 @@ def enviar_sms_desde_filas(
     campaign: str = "", 
     usuario: str = "", 
     query_sql: str = "", 
-    allow_resend: bool = False
+    allow_resend: bool = False,
+    id_mensaje: str = "",
+    id_campana: str = "",
+    link: str = ""
 ) -> Dict:
     """
     Función principal: valida, genera mensajes, envía por lotes con callbackData.
+    id_mensaje e id_campana (del constructor) van en el payload de cada SMS:
+    los dos en callbackData y el de campaña también en campaignReferenceId.
     🔥 MODIFICADO: Ahora captura y guarda message_id individual.
     """
     api_key = (config.get("api_key") or "").strip()
@@ -377,7 +413,7 @@ def enviar_sms_desde_filas(
         )
     
     # Preparar mensajes
-    prepared, details = preparar_sms(rows, plantilla)
+    prepared, details = preparar_sms(rows, plantilla, link)
     logger.debug(f"🔍 DEBUG - Details: {details}")
     for i, item in enumerate(prepared):
         logger.debug(f"🔍 DEBUG - Preparado {i}: phone={item['phone']}")
@@ -387,14 +423,11 @@ def enviar_sms_desde_filas(
         blocked = verificar_lista_negra(client, phones)
         duplicates = verificar_duplicados(client, phones)
         
-        allowed = [item for item in prepared if item["phone"] not in blocked]
-        
-        if not allow_resend and duplicates:
-            allowed = [item for item in allowed if item["phone"] not in duplicates]
-        
+        allowed, n_bloqueados, n_duplicados = filtrar_permitidos(prepared, blocked, duplicates, allow_resend)
+
         details.update({
-            "excluidos_lista_negra": len(blocked),
-            "duplicados_hoy": len(duplicates),
+            "excluidos_lista_negra": n_bloqueados,
+            "duplicados_hoy": n_duplicados,
             "total_validos": len(allowed)
         })
         
@@ -407,32 +440,49 @@ def enviar_sms_desde_filas(
 
     logger.debug(f"🔍 DEBUG - Aplicando filtro de duplicados...")
     logger.debug(f"🔍 DEBUG - Allowed después del filtro: {[item['phone'] for item in allowed]}")
-    if not prepared:
-        raise SmsServiceError("No hay destinatarios válidos después de aplicar las validaciones.")
+    # Sin clientes (consulta vacía o todos excluidos) no se envía nada, ni a los
+    # señuelos: no es un error, el resultado queda con 0 enviados.
+    if not any(not item.get("senuelo") for item in prepared):
+        motivo = ("La consulta no trajo registros" if not rows else
+                  "Ningún cliente quedó después de la lista negra y los duplicados del día")
+        logger.info(f"⏭️ {motivo}: no se envió nada (campaña '{campaign}').")
+        return {
+            "total_preparados": 0, "lotes_enviados": 0, "lotes_fallidos": 0,
+            "enviados": 0, "fallidos": 0, "bulk_ids": [], "errores": [],
+            "details": details, "archivo_guardado": None,
+            "registro_smslog": {"total": 0, "guardados": 0, "errores": []},
+            "sin_destinatarios": True, "mensaje": f"{motivo}: no se envió nada.",
+        }
     
     # Construir mensajes para Infobip con callbackData
     batch_size = max(1, min(int(config.get("batch_size", BATCH_SIZE)), 500))
     messages = []
     
+    id_mensaje = str(id_mensaje or "").strip()
+    id_campana = str(id_campana or "").strip()
     for item in prepared:
-        # callbackData con todos los datos de la fila
+        # callbackData con todos los datos de la fila (son las columnas del reporte de Infobip).
         datos_fila = {}
         for key, value in item["row"].items():
             if value is not None and str(value).strip() != "":
                 datos_fila[key] = str(value).strip()
             else:
                 datos_fila[key] = ""
-        
+        datos_fila = ids_en_callback(datos_fila, id_mensaje, id_campana)
+
         callback_str = json.dumps(datos_fila, ensure_ascii=False)
         if len(callback_str) > 4000:
             callback_str = callback_str[:3997] + "..."
         
-        messages.append({
+        mensaje_infobip = {
             "from": sender_id,
             "destinations": [{"to": item["phone"]}],
             "text": item["text"],
             "callbackData": callback_str
-        })
+        }
+        if id_campana:
+            mensaje_infobip["campaignReferenceId"] = id_campana
+        messages.append(mensaje_infobip)
     
     # Dividir en lotes
     lotes = [messages[i:i + batch_size] for i in range(0, len(messages), batch_size)]
@@ -1042,7 +1092,12 @@ def guardar_programacion(
     hora_inicio: str = None,
     fecha_fin: str = None,
     filas_excel: str = None,
-    link_whatsapp: str = None
+    link_whatsapp: str = None,
+    id_mensaje: str = None,
+    id_campana: str = None,
+    intervalo_minutos: int = None,
+    hora_fin: str = None,
+    link: str = None
 ) -> int:
 
     try:
@@ -1067,7 +1122,12 @@ def guardar_programacion(
             hora_inicio=hora_inicio,
             fecha_fin=fecha_fin,
             filas_excel=filas_excel,
-            link_whatsapp=link_whatsapp
+            link_whatsapp=link_whatsapp,
+            id_mensaje=id_mensaje or None,
+            id_campana=id_campana or None,
+            intervalo_minutos=intervalo_minutos or None,
+            hora_fin=hora_fin or None,
+            link=(link or "").strip() or None
         )
 
         db.session.add(nueva_programacion)
@@ -1201,14 +1261,36 @@ def verificar_duplicados(client, phones: List[str]) -> Set[str]:
         return set()
 
 
+def filtrar_permitidos(prepared: List[Dict], blocked, duplicates, allow_resend: bool = False):
+    """
+    Quita los de lista negra y, sin reenvío confirmado, los que ya recibieron
+    SMS hoy. Los señuelos (item["senuelo"]) nunca se quitan: reciben cada envío
+    para comprobar que sale bien. Devuelve (permitidos, excluidos por lista
+    negra, excluidos por duplicado), sin contar señuelos.
+    """
+    blocked, duplicates = set(blocked or ()), set(duplicates or ())
+    permitidos, n_bloqueados, n_duplicados = [], 0, 0
+    for item in prepared:
+        if item.get("senuelo"):
+            permitidos.append(item)
+        elif item["phone"] in blocked:
+            n_bloqueados += 1
+        elif not allow_resend and item["phone"] in duplicates:
+            n_duplicados += 1
+        else:
+            permitidos.append(item)
+    return permitidos, n_bloqueados, n_duplicados
+
+
 def aplicar_validaciones(
     rows: List[Dict], 
     plantilla: str, 
-    client, 
-    allow_resend: bool = False
+    client,
+    allow_resend: bool = False,
+    link: str = ""
 ) -> Tuple[List[Dict], Dict]:
     """Aplica validaciones de lista negra y duplicados."""
-    prepared, details = preparar_sms(rows, plantilla)
+    prepared, details = preparar_sms(rows, plantilla, link)
     
     if not prepared:
         return [], details
@@ -1218,16 +1300,12 @@ def aplicar_validaciones(
     blocked = verificar_lista_negra(client, phones)
     duplicates = verificar_duplicados(client, phones)
     
-    # Excluir números bloqueados
-    allowed = [item for item in prepared if item["phone"] not in blocked]
-    
-    # Excluir duplicados (a menos que se permita reenvío)
-    if not allow_resend and duplicates:
-        allowed = [item for item in allowed if item["phone"] not in duplicates]
-    
+    # Excluir lista negra y duplicados del día (salvo reenvío); los señuelos nunca.
+    allowed, n_bloqueados, _ = filtrar_permitidos(prepared, blocked, duplicates, allow_resend)
+
     details.update({
         "total_consulta": len(rows),
-        "excluidos_lista_negra": len(blocked),
+        "excluidos_lista_negra": n_bloqueados,
         "telefonos_lista_negra": sorted(blocked),
         "duplicados_hoy": len(duplicates),
         "telefonos_duplicados": sorted(duplicates),

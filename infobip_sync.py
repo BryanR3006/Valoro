@@ -1,5 +1,8 @@
 """
-infobip_sync.py — Copia los SMS de Infobip a BigQuery (Temporal.SmsInfobip).
+infobip_sync.py — Copia los SMS de Infobip a BigQuery (Temporal.SmsInfobip_Valoro).
+
+Solo la cuenta de Infobip de Valoro (infobip.api_key de config.json). La tabla
+Temporal.SmsInfobip es de QNT (la llena su robot con su cuenta): no se usa aquí.
 
 Infobip guarda los logs de SMS solo unos 2 días y un día completo tarda
 minutos en bajar, así que el dashboard no lee la API: lee esta tabla.
@@ -25,7 +28,7 @@ import infobip_logs
 logger = logging.getLogger(__name__)
 
 PROJECT_ID = "capable-arbor-209819"
-TABLA = f"{PROJECT_ID}.Temporal.SmsInfobip"
+TABLA = f"{PROJECT_ID}.Temporal.SmsInfobip_Valoro"
 DIAS_HISTORIA = 90
 
 ESQUEMA = [
@@ -59,7 +62,7 @@ COSTO_SQL = "IFNULL(precio, 0) * IFNULL(partes, IF(LENGTH(texto) > 160, 2, 1))"
 def asegurar_tabla(client):
     """Crea la tabla (partida por día de sent_at, agrupada por bulk_id y estado) si no existe."""
     tabla = bigquery.Table(TABLA, schema=ESQUEMA)
-    tabla.description = "SMS de la cuenta de Infobip (/sms/3/logs), sincronizados por la app (infobip_sync.py)."
+    tabla.description = "SMS de la cuenta de Infobip de Valoro (/sms/3/logs), sincronizados por la app Valoro (infobip_sync.py)."
     tabla.time_partitioning = bigquery.TimePartitioning(
         type_=bigquery.TimePartitioningType.DAY, field="sent_at",
         expiration_ms=DIAS_HISTORIA * 24 * 3600 * 1000)
@@ -71,7 +74,7 @@ def asegurar_tabla(client):
     if nuevas:
         tabla.schema = list(tabla.schema) + nuevas
         client.update_table(tabla, ["schema"])
-        logger.info(f"📨 SmsInfobip: columnas agregadas {[c.name for c in nuevas]}")
+        logger.info(f"📨 SmsInfobip_Valoro: columnas agregadas {[c.name for c in nuevas]}")
 
 
 def _fila(sms, ahora_iso):
@@ -101,7 +104,7 @@ def sincronizar(client, api_key, base_url, desde, hasta):
         return resumen
 
     ahora_iso = datetime.now(timezone.utc).isoformat()
-    temporal = f"{PROJECT_ID}.Temporal.SmsInfobip_carga_{uuid4().hex[:12]}"
+    temporal = f"{TABLA}_carga_{uuid4().hex[:12]}"
     try:
         client.load_table_from_json(
             [_fila(m, ahora_iso) for m in mensajes], temporal,
@@ -132,5 +135,5 @@ def sincronizar(client, api_key, base_url, desde, hasta):
     finally:
         client.delete_table(temporal, not_found_ok=True)
     resumen["segundos"] = round(time.time() - t0, 1)
-    logger.info(f"📨 SmsInfobip: {resumen}")
+    logger.info(f"📨 SmsInfobip_Valoro: {resumen}")
     return resumen

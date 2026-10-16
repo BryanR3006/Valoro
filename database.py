@@ -39,6 +39,21 @@ def _ensure_programacion_sms_columns():
         "link_whatsapp": "TEXT",
         "ultimo_error": "TEXT",
         "ultimo_enviados": "INTEGER",
+        "id_mensaje": "TEXT",
+        "id_campana": "TEXT",
+        "intervalo_minutos": "INTEGER",
+        "hora_fin": "TEXT",
+        "link": "TEXT",
+    })
+
+
+def _ensure_programacion_email_columns():
+    """Columnas de horario de programaciones_email (recurrente igual que SMS)."""
+    _agregar_columnas("programaciones_email", {
+        "hora_inicio": "TEXT",
+        "fecha_fin": "TEXT",
+        "intervalo_minutos": "INTEGER",
+        "hora_fin": "TEXT",
     })
 
 
@@ -54,6 +69,12 @@ def _ensure_momento_columns():
                 'UPDATE "Mensajes_" SET Momento = Categoria WHERE Categoria IS NOT NULL AND Categoria != \'\''))
             db.session.commit()
     _agregar_columnas("plantillas_email", {"momento": "TEXT"})
+    # Etapa (1 a 4) de la plantilla SMS, se elige junto al momento en el constructor.
+    _agregar_columnas("Mensajes_", {"Etapa": "INTEGER"})
+    # IDs que asigna el usuario y viajan en el payload de Infobip.
+    _agregar_columnas("Mensajes_", {"IdMensaje": "TEXT", "IdCampana": "TEXT"})
+    # Link del mensaje: reemplaza {{Link}} en todos los SMS (Infobip lo acorta).
+    _agregar_columnas("Mensajes_", {"Link": "TEXT"})
 
 
 def _avisar_columnas_faltantes():
@@ -82,6 +103,7 @@ def init_db(app):
     with app.app_context():
         db.create_all()
         _ensure_programacion_sms_columns()
+        _ensure_programacion_email_columns()
         _ensure_momento_columns()
         _avisar_columnas_faltantes()
 
@@ -149,6 +171,15 @@ class ProgramacionSms(db.Model):
     ultimo_error = db.Column(db.Text, nullable=True)
     # SMS enviados en la última ejecución (lo muestra Inicio).
     ultimo_enviados = db.Column(db.Integer, nullable=True)
+    # ID del mensaje y de la campaña (del constructor): van en el payload de Infobip.
+    id_mensaje = db.Column(db.String(100), nullable=True)
+    id_campana = db.Column(db.String(100), nullable=True)
+    # Recurrente repetida en el día: cada intervalo_minutos desde hora_inicio
+    # hasta hora_fin (HH:MM). Vacíos = una vez al día (services/sms_horarios.py).
+    intervalo_minutos = db.Column(db.Integer, nullable=True)
+    hora_fin = db.Column(db.String(5), nullable=True)
+    # Link del constructor: reemplaza {{Link}} de todas las filas al ejecutar.
+    link = db.Column(db.Text, nullable=True)
     fecha_ejecucion = db.Column(
         db.DateTime,
         nullable=True
@@ -160,16 +191,118 @@ class ProgramacionSms(db.Model):
         onupdate=datetime.utcnow
     )
     
+class ProgramacionEmail(db.Model):
+    """
+    Programación de email (antes en BigQuery, Temporal.ProgramacionEmail_Valoro).
+    Estados: pendiente / enviando / enviado / completado / error / cancelado.
+    tipo: simple (una vez, en fecha_programada) o recurrente, igual que SMS:
+    todos los días a hora_inicio, o cada intervalo_minutos hasta hora_fin,
+    hasta fecha_fin (services/sms_horarios.py). En la recurrente,
+    fecha_programada es desde cuándo corre (los turnos de antes no salen).
+    Fechas en hora de Colombia sin zona.
+    """
+    __tablename__ = 'programaciones_email'
+
+    id = db.Column(db.String(36), primary_key=True)
+    tipo = db.Column(db.String(20), nullable=False, default='simple')
+    fecha_programada = db.Column(db.DateTime, nullable=False)
+    hora_inicio = db.Column(db.String(5), nullable=True)
+    fecha_fin = db.Column(db.String(10), nullable=True)
+    intervalo_minutos = db.Column(db.Integer, nullable=True)
+    hora_fin = db.Column(db.String(5), nullable=True)
+    consulta_sql = db.Column(db.Text, nullable=False)
+    plantilla = db.Column(db.Text, nullable=False)
+    asunto = db.Column(db.String(255), nullable=False, default='')
+    campana = db.Column(db.String(255), nullable=False, default='')
+    usuario = db.Column(db.String(100), nullable=True)
+    reply_email = db.Column(db.String(255), nullable=True)
+    estado = db.Column(db.String(20), nullable=False, default='pendiente')
+    # Mensaje del último error (estado 'error'), visible en la lista.
+    ultimo_error = db.Column(db.Text, nullable=True)
+    # Emails enviados en la última ejecución y cuándo (lo muestra Inicio).
+    ultimo_enviados = db.Column(db.Integer, nullable=True)
+    fecha_ejecucion = db.Column(db.DateTime, nullable=True)
+    fecha_creacion = db.Column(db.DateTime, default=_ahora_colombia)
+    fecha_actualizacion = db.Column(db.DateTime, default=_ahora_colombia, onupdate=_ahora_colombia)
+
+    def hora_recurrente(self):
+        """Hora de envío de la recurrente. Las viejas no la tienen: era la hora de fecha_programada."""
+        if self.hora_inicio:
+            return self.hora_inicio
+        return self.fecha_programada.strftime("%H:%M") if self.fecha_programada else None
+
+    def a_dict(self):
+        fecha = lambda d: d.strftime("%Y-%m-%d %H:%M:%S") if d else None
+        return {
+            "id": self.id,
+            "tipo": self.tipo or "simple",
+            "fecha_programada": fecha(self.fecha_programada),
+            "hora_inicio": self.hora_recurrente(),
+            "fecha_fin": self.fecha_fin,
+            "intervalo_minutos": self.intervalo_minutos,
+            "hora_fin": self.hora_fin,
+            "consulta_sql": self.consulta_sql,
+            "plantilla": self.plantilla,
+            "asunto": self.asunto or "",
+            "campana": self.campana or "",
+            "usuario": self.usuario or "",
+            "reply_email": self.reply_email or "",
+            "estado": self.estado,
+            "ultimo_error": self.ultimo_error,
+            "ultimo_enviados": self.ultimo_enviados,
+            "fecha_ejecucion": fecha(self.fecha_ejecucion),
+            "fecha_creacion": fecha(self.fecha_creacion),
+            "fecha_actualizacion": fecha(self.fecha_actualizacion),
+        }
+
+
+class EjecucionProgramacion(db.Model):
+    """
+    Una ejecución (turno) de una programación SMS o email: si envió, si la
+    consulta no trajo datos o si falló. Inicio la usa para mostrar cada turno
+    del día (ej. recurrente cada 2 h). Fechas en hora de Colombia sin zona.
+    resultado: enviado / sin_datos / error.
+    """
+    __tablename__ = 'ejecuciones_programacion'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    canal = db.Column(db.String(10), nullable=False)  # sms / email
+    programacion_id = db.Column(db.String(36), nullable=False, index=True)
+    campana = db.Column(db.String(255), nullable=True)
+    # Hora que le tocaba (turno de la recurrente o fecha programada).
+    turno = db.Column(db.DateTime, nullable=True)
+    fecha = db.Column(db.DateTime, nullable=False, default=_ahora_colombia, index=True)
+    resultado = db.Column(db.String(20), nullable=False)
+    filas_consulta = db.Column(db.Integer, nullable=True)
+    enviados = db.Column(db.Integer, nullable=True)
+    excluidos = db.Column(db.Integer, nullable=True)
+    mensaje = db.Column(db.Text, nullable=True)
+
+    def a_dict(self):
+        hora = lambda d: d.strftime("%H:%M") if d else ""
+        return {
+            "turno": hora(self.turno), "a_las": hora(self.fecha), "resultado": self.resultado,
+            "filas_consulta": self.filas_consulta, "enviados": self.enviados,
+            "excluidos": self.excluidos, "mensaje": self.mensaje or "",
+        }
+
+
 class MensajeOperacion(db.Model):
     """
     Plantilla SMS del constructor de mensajes, asignada a un momento del
-    cliente (ej. "Mora corta"). La tabla vieja también tiene Operador, Tipo,
+    cliente (ej. "Mora corta") y a una etapa (1 a 4). La tabla vieja también tiene Operador, Tipo,
     Categoria y Operadores: ya no se usan.
     """
     __tablename__ = 'Mensajes_'
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     Momento = db.Column(db.String(100))
+    Etapa = db.Column(db.Integer)  # 1 a 4; vacía en las plantillas viejas
+    # IDs que asigna el usuario; al elegir la plantilla se copian al envío (payload de Infobip).
+    IdMensaje = db.Column(db.String(100))
+    IdCampana = db.Column(db.String(100))
+    # Link que va en {{Link}} (en vez del de la consulta); Infobip lo acorta al enviar.
+    Link = db.Column(db.Text)
     Mensaje = db.Column(db.Text, nullable=False)
     Estado = db.Column(db.Integer, default=1)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
@@ -180,6 +313,10 @@ class MensajeOperacion(db.Model):
         return {
             'id': self.id,
             'momento': self.Momento or '',
+            'etapa': self.Etapa,
+            'id_mensaje': self.IdMensaje or '',
+            'id_campana': self.IdCampana or '',
+            'link': self.Link or '',
             'mensaje': self.Mensaje,
             'estado': self.Estado,
             'fecha_creacion': self.fecha_creacion.isoformat() if self.fecha_creacion else None,

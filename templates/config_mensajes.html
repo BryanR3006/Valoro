@@ -30,6 +30,20 @@
     padding: 2px 10px; border-radius: 50px; font-size: 0.72rem; cursor: pointer; font-weight: 600;
   }
   .momento-chip:hover { background: var(--success-border); }
+
+  /* Etapa 1 a 4: botones de una sola elección */
+  .etapa-opciones { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .etapa-btn {
+    border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-secondary);
+    border-radius: var(--radius-sm); padding: 7px 0; font-weight: 700; font-size: 0.82rem; cursor: pointer;
+    transition: var(--transition);
+  }
+  .etapa-btn:hover { border-color: var(--border-hover); color: var(--text-primary); }
+  .etapa-btn.activo { border-color: var(--primary); background: var(--primary); color: #fff; }
+  .form-row-ids { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 576px) { .form-row-ids { grid-template-columns: 1fr; } }
+  .ids-mensaje { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; }
+  .badge-etapa { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
 </style>
 {% endblock %}
 
@@ -43,6 +57,17 @@
       <label for="fMomento">Momento</label>
       <select id="fMomento" class="form-control form-control-sm">
         <option value="">Todos</option>
+      </select>
+    </div>
+    <div class="filtro-grupo">
+      <label for="fEtapa">Etapa</label>
+      <select id="fEtapa" class="form-control form-control-sm">
+        <option value="">Todas</option>
+        <option value="1">Etapa 1</option>
+        <option value="2">Etapa 2</option>
+        <option value="3">Etapa 3</option>
+        <option value="4">Etapa 4</option>
+        <option value="sin">Sin etapa</option>
       </select>
     </div>
     <div class="filtro-grupo">
@@ -80,13 +105,14 @@
         <tr>
           <th class="sortable" data-sort="id">ID <i class="fas fa-sort sort-icon"></i></th>
           <th class="sortable" data-sort="momento">Momento <i class="fas fa-sort sort-icon"></i></th>
+          <th class="sortable" data-sort="etapa">Etapa <i class="fas fa-sort sort-icon"></i></th>
           <th>Mensaje</th>
           <th class="sortable" data-sort="estado">Estado <i class="fas fa-sort sort-icon"></i></th>
           <th style="text-align:right;">Acciones</th>
         </tr>
       </thead>
       <tbody id="tablaMensajes">
-        <tr><td colspan="5" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin"></i> Cargando...</td></tr>
+        <tr><td colspan="6" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin"></i> Cargando...</td></tr>
       </tbody>
     </table>
   </div>
@@ -113,6 +139,34 @@
         </div>
         <small class="text-muted">Para qué momento del cliente es el mensaje. Escribe uno nuevo o elige uno.</small>
       </div>
+
+      <div class="form-group">
+        <label>Etapa</label>
+        <div class="etapa-opciones" id="msgEtapa">
+          <button type="button" class="etapa-btn" data-etapa="1">Etapa 1</button>
+          <button type="button" class="etapa-btn" data-etapa="2">Etapa 2</button>
+          <button type="button" class="etapa-btn" data-etapa="3">Etapa 3</button>
+          <button type="button" class="etapa-btn" data-etapa="4">Etapa 4</button>
+        </div>
+        <small class="text-muted">En qué etapa del momento va el mensaje. Haz clic otra vez para dejarlo sin etapa.</small>
+      </div>
+
+      <div class="form-row-ids">
+        <div class="form-group">
+          <label for="msgIdMensaje">ID del mensaje</label>
+          <input type="text" id="msgIdMensaje" class="form-control" placeholder="Ej: MC01" maxlength="100" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="msgIdCampana">ID de la campaña</label>
+          <input type="text" id="msgIdCampana" class="form-control" placeholder="Ej: CAMP-2026-10" maxlength="100" autocomplete="off">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="msgLink">Link</label>
+        <input type="url" id="msgLink" class="form-control" placeholder="https://..." autocomplete="off">
+        <small class="text-muted">Va en <code>{{ '{{' }}Link{{ '}}' }}</code> del mensaje para todos los clientes (no se toma de la consulta). Infobip lo acorta al enviar.</small>
+      </div>
+      <small class="text-muted d-block" style="margin:-8px 0 14px;">Los asignas tú. Al elegir esta plantilla en Enviar SMS se llenan solos y van en el envío a Infobip.</small>
 
       <div class="form-group">
         <label for="msgMensaje">Mensaje <span class="text-danger">*</span></label>
@@ -143,7 +197,7 @@
 
   const $ = id => document.getElementById(id);
   const modalEl = $('modalMensaje');
-  const fMomento = $('fMomento'), fEstado = $('fEstado'), fBusqueda = $('fBusqueda');
+  const fMomento = $('fMomento'), fEtapa = $('fEtapa'), fEstado = $('fEstado'), fBusqueda = $('fBusqueda');
   const tablaMensajes = $('tablaMensajes');
 
   let TODOS = [];
@@ -168,9 +222,21 @@
   function cerrarModal() { modalEl.classList.remove('active'); resetForm(); }
   function resetForm() {
     $('mensajeId').value = ''; $('msgMomento').value = ''; $('msgMensaje').value = ''; $('msgEstado').value = '1';
+    $('msgIdMensaje').value = ''; $('msgIdCampana').value = ''; $('msgLink').value = '';
+    marcarEtapa(null);
     $('formTitulo').textContent = 'Nuevo mensaje';
     contarCaracteres();
   }
+
+  // Etapa elegida en el formulario (null = sin etapa).
+  let etapaElegida = null;
+  function marcarEtapa(etapa) {
+    etapaElegida = etapa ? Number(etapa) : null;
+    document.querySelectorAll('#msgEtapa .etapa-btn').forEach(b =>
+      b.classList.toggle('activo', Number(b.dataset.etapa) === etapaElegida));
+  }
+  document.querySelectorAll('#msgEtapa .etapa-btn').forEach(b => b.addEventListener('click', () =>
+    marcarEtapa(Number(b.dataset.etapa) === etapaElegida ? null : b.dataset.etapa)));
   function contarCaracteres() { $('msgLargo').textContent = `${$('msgMensaje').value.length} caracteres`; }
 
   $('btnNuevoMensaje').addEventListener('click', () => { resetForm(); abrirModal(); });
@@ -189,6 +255,10 @@
     $('msgMomento').value = m.momento || '';
     $('msgMensaje').value = m.mensaje || '';
     $('msgEstado').value = m.estado;
+    marcarEtapa(m.etapa);
+    $('msgIdMensaje').value = m.id_mensaje || '';
+    $('msgIdCampana').value = m.id_campana || '';
+    $('msgLink').value = m.link || '';
     $('formTitulo').textContent = 'Editar mensaje';
     contarCaracteres();
     abrirModal();
@@ -198,6 +268,10 @@
     const id = $('mensajeId').value;
     const payload = {
       momento: $('msgMomento').value.trim(),
+      etapa: etapaElegida,
+      id_mensaje: $('msgIdMensaje').value.trim(),
+      id_campana: $('msgIdCampana').value.trim(),
+      link: $('msgLink').value.trim(),
       mensaje: $('msgMensaje').value.trim(),
       estado: parseInt($('msgEstado').value)
     };
@@ -233,9 +307,10 @@
 
   // ========== TABLA ==========
   function filtrados() {
-    const momento = fMomento.value, estado = fEstado.value, busqueda = fBusqueda.value.trim().toLowerCase();
+    const momento = fMomento.value, etapa = fEtapa.value, estado = fEstado.value, busqueda = fBusqueda.value.trim().toLowerCase();
     const items = TODOS.filter(m =>
       (!momento || (m.momento || '') === momento) &&
+      (!etapa || (etapa === 'sin' ? !m.etapa : String(m.etapa) === etapa)) &&
       (estado === '' || String(m.estado) === estado) &&
       (!busqueda || (m.mensaje || '').toLowerCase().includes(busqueda)));
     const { campo, dir } = orden;
@@ -257,14 +332,17 @@
       th.querySelector('.sort-icon').className = 'fas sort-icon ' + (activo ? (orden.dir === 'asc' ? 'fa-sort-up' : 'fa-sort-down') : 'fa-sort');
     });
     if (!items.length) {
-      tablaMensajes.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No hay mensajes</td></tr>';
+      tablaMensajes.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No hay mensajes</td></tr>';
       return;
     }
     tablaMensajes.innerHTML = items.map(m => `
       <tr>
         <td class="text-muted small">${m.id}</td>
         <td>${m.momento ? `<span class="badge badge-momento">${escapeHTML(m.momento)}</span>` : '<span class="text-muted small">Sin momento</span>'}</td>
-        <td class="mensaje-preview" title="${escapeHTML(m.mensaje)}">${escapeHTML(m.mensaje)}</td>
+        <td>${m.etapa ? `<span class="badge badge-etapa">Etapa ${m.etapa}</span>` : '<span class="text-muted small">—</span>'}</td>
+        <td class="mensaje-preview" title="${escapeHTML(m.mensaje)}">${escapeHTML(m.mensaje)}
+          ${m.id_mensaje || m.id_campana ? `<div class="ids-mensaje">ID mensaje: <b>${escapeHTML(m.id_mensaje || '—')}</b> · ID campaña: <b>${escapeHTML(m.id_campana || '—')}</b></div>` : ''}
+          ${m.link ? `<div class="ids-mensaje"><i class="fas fa-link"></i> ${escapeHTML(m.link)}</div>` : ''}</td>
         <td>${m.estado == 1 ? '<span class="badge badge-activo">Activo</span>' : '<span class="badge badge-inactivo">Inactivo</span>'}</td>
         <td>
           <div class="acciones-fila" style="justify-content:flex-end;">
@@ -283,10 +361,10 @@
     orden = { campo: th.dataset.sort, dir: orden.campo === th.dataset.sort && orden.dir === 'asc' ? 'desc' : 'asc' };
     renderTabla();
   }));
-  [fMomento, fEstado].forEach(el => el.addEventListener('change', renderTabla));
+  [fMomento, fEtapa, fEstado].forEach(el => el.addEventListener('change', renderTabla));
   fBusqueda.addEventListener('input', renderTabla);
   $('btnLimpiarFiltros').addEventListener('click', () => {
-    fMomento.value = ''; fEstado.value = ''; fBusqueda.value = '';
+    fMomento.value = ''; fEtapa.value = ''; fEstado.value = ''; fBusqueda.value = '';
     renderTabla();
   });
 
@@ -302,7 +380,7 @@
       fMomento.value = momentos.includes(actual) ? actual : '';
       renderTabla();
     } catch (e) {
-      tablaMensajes.innerHTML = '<tr><td colspan="5" class="text-center text-danger py-4">Error al cargar los mensajes.</td></tr>';
+      tablaMensajes.innerHTML = '<tr><td colspan="6" class="text-center text-danger py-4">Error al cargar los mensajes.</td></tr>';
       toast(e.message, 'danger');
     }
   }

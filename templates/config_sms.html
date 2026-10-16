@@ -59,17 +59,7 @@
     font-size: 0.82rem; line-height: 1.6; background: var(--bg-code); tab-size: 2;
   }
 
-  .sms-auto-section {
-    background: var(--bg-code); border: 1.5px dashed var(--border);
-    border-radius: 12px; padding: 14px 18px; margin-bottom: 16px;
-  }
-  .sms-auto-section .section-title {
-    font-weight: 700; font-size: 0.85rem; color: var(--primary);
-    margin-bottom: 10px; display: flex; align-items: center; gap: 8px;
-  }
-
-  .sms-cuando { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
-  .sms-cuando .sms-field { margin-bottom: 0; }
+  /* .sms-auto-section, .sms-cuando y .sms-turnos están en valoro.css (también los usa email). */
 
   .sms-flag {
     display: flex; gap: 10px; align-items: flex-start;
@@ -196,6 +186,16 @@
                 <option value="">-- Todos --</option>
               </select>
             </div>
+            <div style="flex:0 0 130px;">
+              <label for="maEtapa" style="font-size:0.72rem;font-weight:600;color:var(--text-secondary);">Etapa</label>
+              <select id="maEtapa" class="form-control form-control-sm">
+                <option value="">-- Todas --</option>
+                <option value="1">Etapa 1</option>
+                <option value="2">Etapa 2</option>
+                <option value="3">Etapa 3</option>
+                <option value="4">Etapa 4</option>
+              </select>
+            </div>
             <div style="flex:2;min-width:240px;">
               <label for="maMensajeSelect" style="font-size:0.72rem;font-weight:600;color:var(--text-secondary);">Mensaje</label>
               <select id="maMensajeSelect" class="form-control form-control-sm">
@@ -203,9 +203,24 @@
               </select>
             </div>
           </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            <div style="flex:1;min-width:160px;">
+              <label for="idMensaje" style="font-size:0.72rem;font-weight:600;color:var(--text-secondary);">ID del mensaje</label>
+              <input id="idMensaje" class="form-control form-control-sm" placeholder="Ej: MC01" maxlength="100" autocomplete="off">
+            </div>
+            <div style="flex:1;min-width:160px;">
+              <label for="idCampana" style="font-size:0.72rem;font-weight:600;color:var(--text-secondary);">ID de la campaña</label>
+              <input id="idCampana" class="form-control form-control-sm" placeholder="Ej: CAMP-2026-10" maxlength="100" autocomplete="off">
+            </div>
+            <div style="flex:2;min-width:240px;">
+              <label for="linkMensaje" style="font-size:0.72rem;font-weight:600;color:var(--text-secondary);">Link <span style="font-weight:400;">(va en {{ '{{' }}Link{{ '}}' }})</span></label>
+              <input id="linkMensaje" type="url" class="form-control form-control-sm" placeholder="https://..." autocomplete="off">
+            </div>
+          </div>
           <div style="margin-top:6px;font-size:0.72rem;color:var(--text-secondary);">
             <i class="fas fa-info-circle"></i>
-            Elige el momento del cliente (mora corta, acuerdo de pago…) y una plantilla: se copia abajo y puedes ajustarla.
+            Elige el momento del cliente (mora corta, acuerdo de pago…), la etapa y una plantilla: se copia abajo y puedes ajustarla.
+            Los IDs y el link vienen de la plantilla (puedes cambiarlos). El link reemplaza {{ '{{' }}Link{{ '}}' }} para todos (la consulta no necesita traerlo) e Infobip lo acorta.
           </div>
         </div>
 
@@ -270,8 +285,6 @@
           </div>
         </div>
 
-        <input type="hidden" id="idMensajeHidden" value="">
-
         <!-- FLAG DUPLICADOS -->
         <div class="sms-flag" id="duplicateFlag">
           <input type="checkbox" id="confirmarReenvio">
@@ -307,11 +320,20 @@
               <input id="horaRecurrente" type="time" class="form-control" value="08:00">
             </div>
             <div class="sms-field solo-recurrente" style="display:none;">
+              <label for="intervaloRecurrente">Repetir en el día</label>
+              <select id="intervaloRecurrente" class="form-control"></select>
+            </div>
+            <div class="sms-field solo-recurrente solo-intervalo" style="display:none;">
+              <label for="horaFinRecurrente">Hasta las</label>
+              <input id="horaFinRecurrente" type="time" class="form-control" value="18:30">
+            </div>
+            <div class="sms-field solo-recurrente" style="display:none;">
               <label for="fechaLimite">Fecha fin (opcional)</label>
               <input id="fechaLimite" type="date" class="form-control">
             </div>
           </div>
-          <div class="sms-help"><span><i class="fas fa-info-circle"></i> Recurrente: sale todos los días a esa hora hasta la fecha fin. Con Excel solo se puede programar una vez.</span></div>
+          <div class="sms-turnos solo-recurrente" id="turnosRecurrente" style="display:none;"></div>
+          <div class="sms-help"><span><i class="fas fa-info-circle"></i> Recurrente: sale todos los días a esa hora (o cada cierto tiempo hasta la hora "Hasta las") hasta la fecha fin. Con Excel solo se puede programar una vez.</span></div>
         </div>
 
         <!-- BOTONES -->
@@ -398,6 +420,9 @@
   const tipoProgramacionEl = document.getElementById('tipoProgramacion');
   const horaRecurrenteEl = document.getElementById('horaRecurrente');
   const fechaLimiteEl = document.getElementById('fechaLimite');
+  const intervaloEl = document.getElementById('intervaloRecurrente');
+  const horaFinEl = document.getElementById('horaFinRecurrente');
+  ValoroHorarios.llenarSelect(intervaloEl);
   const previewBtn = document.getElementById('previewBtn');
   const sendBtn = document.getElementById('sendBtn');
   const scheduleBtn = document.getElementById('scheduleBtn');
@@ -436,6 +461,7 @@
     if (hora === 'simple' && !fechaProgramadaEl.value) faltan.push('fecha de envío');
     if (hora === 'simple' && !horaProgramadaEl.value) faltan.push('hora de envío');
     if (hora === 'recurrente' && !horaRecurrenteEl.value) faltan.push('hora de envío');
+    if (hora === 'recurrente' && intervaloEl.value && !horaFinEl.value) faltan.push('hasta qué hora (Hasta las)');
     if (faltan.length) showToast('⚠️ Faltan datos obligatorios: ' + faltan.join(', '), 'warning');
     return faltan.length > 0;
   }
@@ -503,8 +529,25 @@
     const recurrente = tipoProgramacionEl.value === 'recurrente';
     document.querySelectorAll('.solo-simple').forEach(el => el.style.display = recurrente ? 'none' : '');
     document.querySelectorAll('.solo-recurrente').forEach(el => el.style.display = recurrente ? '' : 'none');
+    mostrarTurnos();
   }
   tipoProgramacionEl.addEventListener('change', mostrarCamposTipo);
+
+  // Repetir en el día: muestra "Hasta las" y las horas en que saldrá.
+  function mostrarTurnos() {
+    const recurrente = tipoProgramacionEl.value === 'recurrente';
+    const conIntervalo = recurrente && !!intervaloEl.value;
+    document.querySelectorAll('.solo-intervalo').forEach(el => el.style.display = conIntervalo ? '' : 'none');
+    const caja = document.getElementById('turnosRecurrente');
+    if (!recurrente) return;
+    const horas = ValoroHorarios.horasDelDia(horaRecurrenteEl.value, intervaloEl.value, horaFinEl.value);
+    caja.classList.toggle('invalido', !horas.length);
+    caja.innerHTML = horas.length
+      ? '<i class="far fa-clock"></i> Sale todos los días a las: ' + horas.map(h => `<span class="turno">${h}</span>`).join('')
+      : '<i class="fas fa-exclamation-circle"></i> "Hasta las" debe ser después de la hora de envío.';
+  }
+  [intervaloEl, horaFinEl, horaRecurrenteEl].forEach(el => el.addEventListener('input', mostrarTurnos));
+  intervaloEl.addEventListener('change', mostrarTurnos);
 
   function getPayload() {
     const esRecurrente = tipoProgramacionEl.value === 'recurrente';
@@ -516,11 +559,15 @@
       usuario: usuarioEl.value.trim(),
       link_whatsapp: document.getElementById('linkWhatsapp').value.trim(),
       confirmar_reenvio: confirmarReenvioEl.checked,
-      id_mensaje: document.getElementById('idMensajeHidden').value || null
+      id_mensaje: document.getElementById('idMensaje').value.trim() || null,
+      id_campana: document.getElementById('idCampana').value.trim() || null,
+      link: document.getElementById('linkMensaje').value.trim() || null
     };
     if (esRecurrente) {
       payload.hora_inicio = horaRecurrenteEl.value || null;
       payload.fecha_fin = fechaLimiteEl.value || null;
+      payload.intervalo_minutos = intervaloEl.value ? Number(intervaloEl.value) : null;
+      payload.hora_fin = intervaloEl.value ? (horaFinEl.value || null) : null;
     } else {
       payload.fecha_programada = fechaProgramadaEl.value 
         ? `${fechaProgramadaEl.value}T${horaProgramadaEl.value || '08:00'}`
@@ -543,7 +590,9 @@
       phoneBubble.textContent = 'Escribe tu plantilla para ver una vista previa aquí…';
       phoneBubble.classList.add('is-placeholder');
     } else {
-      phoneBubble.textContent = texto;
+      // Con link del constructor, la vista previa lo muestra en lugar de {{Link}}.
+      const link = document.getElementById('linkMensaje').value.trim();
+      phoneBubble.textContent = link ? texto.replace(/\{\{\s*link\s*\}\}/gi, link) : texto;
       phoneBubble.classList.remove('is-placeholder');
     }
     phoneMetaCount.textContent = `${len} caracteres · ${segs || 1} segmento(s)`;
@@ -577,7 +626,6 @@
     document.getElementById('previewDetail').style.display = 'none';
     sendBtn.disabled = true;
     previewData = null; totalAEnviar = 0;
-    document.getElementById('idMensajeHidden').value = '';
   }
 
   function setLoading(btn, loading) {
@@ -605,6 +653,7 @@
 
   // ========== CONSTRUCTOR: PLANTILLAS POR MOMENTO ==========
   const momentoSel = document.getElementById('maMomento');
+  const etapaSel = document.getElementById('maEtapa');
   const mensajeSel = document.getElementById('maMensajeSelect');
   let plantillasSms = [];
 
@@ -619,27 +668,36 @@
     } catch (e) { console.error('Error cargando momentos:', e); }
   }
 
-  // Plantillas activas del momento elegido (todas si no hay momento).
+  // Plantillas activas del momento y la etapa elegidos (sin filtro = todas).
   async function cargarPlantillasSms() {
     mensajeSel.innerHTML = '<option value="">Cargando...</option>';
     try {
       const params = new URLSearchParams({ activos: '1' });
       if (momentoSel.value) params.append('momento', momentoSel.value);
+      if (etapaSel.value) params.append('etapa', etapaSel.value);
       const data = await (await fetch(`/api/sms/mensajes?${params}`)).json();
       plantillasSms = data.items || [];
       mensajeSel.innerHTML = plantillasSms.length === 0 ? '<option value="">-- Sin mensajes --</option>' :
-        '<option value="">-- Selecciona mensaje --</option>' + plantillasSms.map(m =>
-          `<option value="${m.id}">${momentoSel.value ? '' : escapeHtml(m.momento || 'Sin momento') + ' · '}${escapeHtml((m.mensaje || '').substring(0, 60))}</option>`).join('');
+        '<option value="">-- Selecciona mensaje --</option>' + plantillasSms.map(m => {
+          const etiqueta = [momentoSel.value ? '' : (m.momento || 'Sin momento'),
+                            etapaSel.value || !m.etapa ? '' : `Etapa ${m.etapa}`].filter(Boolean).join(' · ');
+          return `<option value="${m.id}">${etiqueta ? escapeHtml(etiqueta) + ' · ' : ''}${escapeHtml((m.mensaje || '').substring(0, 60))}</option>`;
+        }).join('');
     } catch (e) { mensajeSel.innerHTML = '<option value="">-- Error --</option>'; }
   }
 
   momentoSel.addEventListener('change', cargarPlantillasSms);
+  etapaSel.addEventListener('change', cargarPlantillasSms);
 
   mensajeSel.addEventListener('change', function() {
     const m = plantillasSms.find(x => String(x.id) === this.value);
     if (m) {
       plantillaEl.value = m.mensaje;
-      document.getElementById('idMensajeHidden').value = this.value;
+      // IDs por defecto de la plantilla (se pueden cambiar a mano).
+      document.getElementById('idMensaje').value = m.id_mensaje || '';
+      document.getElementById('idCampana').value = m.id_campana || '';
+      document.getElementById('linkMensaje').value = m.link || '';
+      actualizarMockup();
       actualizarMockup();
       showToast('✅ Plantilla cargada', 'success', 2000);
     }
@@ -721,7 +779,8 @@
       setLoading(sendBtn, true);
       const data = await callAPI('/api/sms/enviar', getPayload());
       showResult(`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"><div><strong>✅ Enviados:</strong> ${data.enviados || 0}</div><div><strong>❌ Fallidos:</strong> ${data.fallidos || 0}</div><div><strong>📦 Bulk ID:</strong> <code>${data.bulk_id || 'N/A'}</code></div></div>`);
-      showToast(data.enviados > 0 ? `✅ ${data.enviados} SMS enviados` : '❌ Error', data.enviados > 0 ? 'success' : 'danger');
+      if (data.sin_destinatarios) showToast(`ℹ️ ${data.mensaje}`, 'info');
+      else showToast(data.enviados > 0 ? `✅ ${data.enviados} SMS enviados` : '❌ Error', data.enviados > 0 ? 'success' : 'danger');
       const registro = data.registro_smslog || {};
       if (registro.errores && registro.errores.length) {
         showToast(`⚠️ Solo ${registro.guardados} de ${registro.total} SMS quedaron registrados en SmsLog. ` +
@@ -740,7 +799,7 @@
       setLoading(scheduleBtn, true);
       const data = await callAPI(recurrente ? '/api/sms/programar-recurrente' : '/api/sms/programar', getPayload());
       const cuando = recurrente
-        ? `Todos los días a las ${horaRecurrenteEl.value}${fechaLimiteEl.value ? ' hasta ' + fechaLimiteEl.value : ''}`
+        ? `${ValoroHorarios.texto(horaRecurrenteEl.value, intervaloEl.value, horaFinEl.value)}${fechaLimiteEl.value ? ' hasta el ' + fechaLimiteEl.value : ''}`
         : `${fechaProgramadaEl.value} ${horaProgramadaEl.value}`;
       showToast(`✅ Programado (ID: ${data.id})`, 'success', 5000);
       showResult(`<div class="alert alert-success mb-0"><i class="fas fa-check-circle"></i> <strong>Programación creada</strong><br>ID: <code>${data.id}</code><br>${escapeHtml(cuando)}<br>Destinatarios hoy: ${data.total_destinatarios || '—'}</div>`);
@@ -758,8 +817,10 @@
     fechaProgramadaEl.value = ''; horaProgramadaEl.value = '08:00';
     tipoProgramacionEl.value = 'simple'; mostrarCamposTipo();
     horaRecurrenteEl.value = '08:00'; fechaLimiteEl.value = '';
-    document.getElementById('idMensajeHidden').value = '';
-    momentoSel.value = ''; cargarPlantillasSms();
+    intervaloEl.value = ''; horaFinEl.value = '18:30'; mostrarTurnos();
+    document.getElementById('idMensaje').value = ''; document.getElementById('idCampana').value = '';
+    document.getElementById('linkMensaje').value = '';
+    momentoSel.value = ''; etapaSel.value = ''; cargarPlantillasSms();
     phoneBubble.textContent = 'Escribe tu plantilla...'; phoneBubble.classList.add('is-placeholder');
     phoneMetaCount.textContent = '0 caracteres'; charCounter.textContent = '0 caracteres · 1 segmento';
     rowCount.textContent = '0 filas'; document.getElementById('duplicateFlag').className = 'sms-flag';
@@ -768,6 +829,7 @@
 
   // ========== INICIALIZACIÓN ==========
   plantillaEl.addEventListener('input', actualizarMockup);
+  document.getElementById('linkMensaje').addEventListener('input', actualizarMockup);
   actualizarMockup();
 
 })();

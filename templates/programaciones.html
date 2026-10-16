@@ -1,0 +1,710 @@
+{% extends "layouts/adminlte.html" %}
+{# Historial de programaciones SMS y email en una tabla, como Programaciones Terminator del
+   robot: filtros, ver el mensaje, si se ejecutó, editar, cancelar, reintentar y eliminar.
+   Usa las APIs de cada canal (/api/sms/programaciones y /api/email/programaciones). #}
+
+{% block title %}Programaciones{% endblock %}
+
+{% block page_title %}<h1>Historial de programaciones</h1>{% endblock %}
+{% block page_subtitle %}Todas las programaciones de SMS y email: qué mensaje llevan, si ya se ejecutaron y su resultado.{% endblock %}
+
+{% block extra_css %}
+<style>
+  .hp-card { overflow: hidden; }
+  .hp-card .card-header { flex-wrap: wrap; gap: 12px; }
+  .hp-filtros { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .hp-filtros select, .hp-filtros input {
+    border: 1.5px solid var(--border); border-radius: 8px; padding: 6px 12px;
+    font-size: 0.8rem; background: #fff; color: var(--text-primary); height: 34px;
+  }
+  .hp-filtros input { min-width: 200px; }
+  .hp-resumen { padding: 14px 20px 0; }
+  .hp-resumen .prog-resumen { margin-bottom: 0; }
+
+  .hp-tabla-wrap { overflow-x: auto; }
+  .hp-tabla { width: 100%; min-width: 1100px; font-size: 0.84rem; }
+  .hp-tabla th { white-space: nowrap; text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.04em; }
+  .hp-tabla td { vertical-align: middle; }
+  .hp-id { color: var(--primary); background: var(--primary-light); padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; font-weight: 700; }
+  .hp-nombre strong { display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hp-nombre small { color: var(--text-muted); font-size: 0.72rem; }
+  .hp-mensaje {
+    max-width: 280px; color: var(--text-secondary); cursor: pointer;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .hp-mensaje:hover { color: var(--primary); }
+  .hp-cuando { white-space: nowrap; }
+  .hp-cuando small { display: block; color: var(--text-muted); font-size: 0.72rem; }
+  .hp-ejec { white-space: nowrap; font-size: 0.8rem; }
+  .hp-ejec small { display: block; color: var(--text-muted); font-size: 0.72rem; }
+  .hp-ejec .si { color: #1d5c12; font-weight: 700; }
+  .hp-ejec .no { color: var(--text-muted); font-weight: 600; }
+  .hp-error { margin-top: 4px; max-width: 220px; font-size: 0.72rem; color: #B42318; white-space: normal; word-break: break-word; }
+  .hp-canal-sms { background: var(--primary-light); color: var(--primary); }
+  .hp-canal-email { background: var(--info-bg); color: var(--info); }
+  .hp-acciones { display: inline-flex; gap: 4px; flex-wrap: nowrap; }
+  .hp-acciones .btn { padding: 4px 9px; }
+  .hp-vacio { text-align: center; padding: 56px 20px; color: var(--text-secondary); }
+  .hp-vacio i { font-size: 2.6rem; display: block; margin-bottom: 12px; opacity: 0.3; }
+  .hp-footer {
+    padding: 12px 20px; border-top: 1px solid var(--border); display: flex;
+    justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.8rem; color: var(--text-secondary);
+  }
+  .hp-footer .total { font-weight: 700; color: var(--primary); }
+
+  /* Botón Nueva con menú SMS / Email */
+  .hp-nueva { position: relative; }
+  .hp-nueva-menu {
+    display: none; position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 190px;
+    background: #fff; border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-md); padding: 4px;
+  }
+  .hp-nueva.abierto .hp-nueva-menu { display: block; }
+  .hp-nueva-menu a { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-radius: 6px; color: var(--text-primary); font-size: 0.84rem; text-decoration: none; }
+  .hp-nueva-menu a:hover { background: var(--bg-hover); }
+
+  /* Modales */
+  #verModal .modal-box, #editarModal .modal-box { max-width: 720px; }
+  .hp-detalle { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; margin-bottom: 16px; }
+  .hp-detalle div { font-size: 0.84rem; }
+  .hp-detalle span { display: block; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); font-weight: 700; }
+  .hp-bloque-titulo { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); font-weight: 700; margin: 14px 0 6px; }
+  .hp-texto {
+    background: var(--bg-code); border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+    padding: 10px 12px; font-size: 0.84rem; white-space: pre-wrap; word-break: break-word;
+  }
+  .hp-sql { font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 0.78rem; max-height: 180px; overflow: auto; }
+  .hp-html { width: 100%; height: 320px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fff; }
+  #editarModal .sms-field { margin-bottom: 14px; }
+  #editarModal .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  #editarModal .form-row .sms-field { margin-bottom: 14px; }
+  #editarModal textarea.codigo { font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 0.8rem; }
+  @media (max-width: 768px) {
+    .hp-detalle, #editarModal .form-row { grid-template-columns: 1fr; }
+    .hp-filtros input { min-width: 0; flex: 1; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="smsToastArea"></div>
+
+<!-- VER PROGRAMACIÓN -->
+<div class="modal-overlay" id="verModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3><i class="fas fa-eye"></i> <span id="verTitulo">Programación</span></h3>
+      <button class="modal-close" data-cerrar="verModal">&times;</button>
+    </div>
+    <div class="modal-body" id="verCuerpo"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-cerrar="verModal">Cerrar</button>
+      <button class="btn btn-success" id="verEditar"><i class="fas fa-edit"></i> Editar</button>
+    </div>
+  </div>
+</div>
+
+<!-- EDITAR PROGRAMACIÓN (SMS o email: se muestran los campos del canal) -->
+<div class="modal-overlay" id="editarModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3><i class="fas fa-edit"></i> <span id="editTitulo">Editar programación</span></h3>
+      <button class="modal-close" data-cerrar="editarModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="sms-field">
+        <label>Nombre de la campaña <span class="badge-required">requerido</span></label>
+        <input type="text" class="form-control" id="eCampana">
+      </div>
+      <div class="form-row">
+        <div class="sms-field">
+          <label>Tipo <span class="badge-required">requerido</span></label>
+          <select class="form-control" id="eTipo">
+            <option value="simple">Simple (una vez)</option>
+            <option value="recurrente">Recurrente (todos los días)</option>
+          </select>
+        </div>
+        <div class="sms-field">
+          <label>Responsable</label>
+          <input type="text" class="form-control" id="eUsuario">
+        </div>
+      </div>
+      <div class="sms-field" id="eConsultaCampo">
+        <label>Consulta SQL <span class="badge-required">requerido</span></label>
+        <textarea class="form-control codigo" id="eConsulta" rows="4"></textarea>
+        <div class="sms-help"><span>Se revisa en BigQuery al guardar.</span></div>
+      </div>
+      <div class="sms-help" id="eExcelAviso" style="display:none;margin-bottom:14px;">
+        <span><i class="fas fa-file-excel"></i> La base salió de un Excel: no se puede cambiar aquí y solo puede ser simple.</span>
+      </div>
+
+      <!-- Solo SMS -->
+      <div class="solo-canal" data-canal="sms">
+        <div class="form-row">
+          <div class="sms-field">
+            <label>ID del mensaje</label>
+            <input type="text" class="form-control" id="eIdMensaje" maxlength="100">
+          </div>
+          <div class="sms-field">
+            <label>ID de la campaña</label>
+            <input type="text" class="form-control" id="eIdCampana" maxlength="100">
+          </div>
+        </div>
+        <div class="sms-field">
+          <label>Link <small class="text-muted">(va en {{ '{{' }}Link{{ '}}' }} para todos)</small></label>
+          <input type="url" class="form-control" id="eLink" placeholder="https://...">
+        </div>
+        <div class="sms-field">
+          <label>Mensaje <span class="badge-required">requerido</span></label>
+          <textarea class="form-control" id="eMensajeSms" rows="4"></textarea>
+          <div class="sms-help"><span id="eLargoSms">0 caracteres</span></div>
+        </div>
+      </div>
+
+      <!-- Solo email -->
+      <div class="solo-canal" data-canal="email">
+        <div class="form-row">
+          <div class="sms-field">
+            <label>Asunto <span class="badge-required">requerido</span></label>
+            <input type="text" class="form-control" id="eAsunto">
+          </div>
+          <div class="sms-field">
+            <label>Reply-To</label>
+            <input type="email" class="form-control" id="eReply">
+          </div>
+        </div>
+        <div class="sms-field">
+          <label>Mensaje (contenido HTML) <span class="badge-required">requerido</span></label>
+          <textarea class="form-control codigo" id="eHtml" rows="7"></textarea>
+        </div>
+      </div>
+
+      <!-- Cuándo -->
+      <div class="form-row" id="eFilaSimple">
+        <div class="sms-field">
+          <label>Fecha y hora de envío <span class="badge-required">requerido</span></label>
+          <input type="datetime-local" class="form-control" id="eFecha">
+        </div>
+      </div>
+      <div class="form-row" id="eFilaRecurrente" style="display:none;">
+        <div class="sms-field">
+          <label>Hora de envío <span class="badge-required">requerido</span></label>
+          <input type="time" class="form-control" id="eHora">
+        </div>
+        <div class="sms-field">
+          <label>Fecha fin (opcional)</label>
+          <input type="date" class="form-control" id="eFechaFin">
+        </div>
+        <div class="sms-field">
+          <label>Repetir en el día</label>
+          <select class="form-control" id="eIntervalo"></select>
+        </div>
+        <div class="sms-field" id="eHoraFinCampo">
+          <label>Hasta las</label>
+          <input type="time" class="form-control" id="eHoraFin">
+        </div>
+      </div>
+      <div class="sms-help" id="eTurnos" style="display:none;margin-bottom:12px;"></div>
+      <div class="sms-field solo-canal" data-canal="sms">
+        <label class="form-check"><input type="checkbox" id="eReenvio"> Confirmo el reenvío a clientes que ya recibieron SMS hoy</label>
+      </div>
+      <div class="sms-help"><span><i class="fas fa-info-circle"></i> Al guardar, la programación queda pendiente y se vuelve a agendar.</span></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-cerrar="editarModal">Cancelar</button>
+      <button class="btn btn-success" id="eGuardar"><i class="fas fa-save"></i> Guardar cambios</button>
+    </div>
+  </div>
+</div>
+
+<!-- TABLA -->
+<div class="card hp-card">
+  <div class="card-header">
+    <h3><i class="fas fa-clock-rotate-left"></i> Todas las programaciones</h3>
+    <div class="hp-filtros">
+      <input type="search" id="fBuscar" placeholder="Buscar campaña, mensaje o ID...">
+      <select id="fCanal">
+        <option value="">Todos los canales</option>
+        <option value="sms">SMS</option>
+        <option value="email">Email</option>
+      </select>
+      <select id="fEstado">
+        <option value="">Todos los estados</option>
+        <option value="pendiente">Pendiente</option>
+        <option value="enviando">Enviando</option>
+        <option value="enviado">Enviado</option>
+        <option value="completado">Completado</option>
+        <option value="error">Error</option>
+        <option value="cancelado">Cancelado</option>
+      </select>
+      <select id="fTipo">
+        <option value="">Todos los tipos</option>
+        <option value="simple">Simple</option>
+        <option value="recurrente">Recurrente</option>
+      </select>
+      <select id="fEjecucion">
+        <option value="">Ejecutadas y no</option>
+        <option value="si">Ya se ejecutó</option>
+        <option value="no">No se ha ejecutado</option>
+      </select>
+      <button class="btn btn-outline-secondary btn-sm" id="btnRefrescar"><i class="fas fa-sync-alt"></i> Refrescar</button>
+      <div class="hp-nueva" id="hpNueva">
+        <button class="btn btn-primary btn-sm" id="btnNueva"><i class="fas fa-plus"></i> Nueva <i class="fas fa-caret-down"></i></button>
+        <div class="hp-nueva-menu">
+          <a href="/sms/programaciones"><i class="fas fa-sms"></i> Programación SMS</a>
+          <a href="/email/programaciones"><i class="fas fa-envelope"></i> Programación email</a>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="hp-resumen"><div class="prog-resumen" id="hpResumen"></div></div>
+  <div class="hp-tabla-wrap" id="hpLista">
+    <div class="hp-vacio"><i class="fas fa-spinner fa-spin"></i><p>Cargando programaciones...</p></div>
+  </div>
+  <div class="hp-footer" id="hpFooter" style="display:none;">
+    <span><i class="fas fa-info-circle"></i> Mostrando <span class="total" id="hpTotal">0</span> de <span id="hpTodas">0</span> programaciones</span>
+    <span><i class="fas fa-calendar-alt"></i> Actualizado: <span id="hpHora">—</span></span>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+  'use strict';
+
+  const $ = id => document.getElementById(id);
+
+  function esc(str) {
+    if (str === null || str === undefined) return '';
+    return String(str).replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
+  }
+
+  function toast(msg, type) {
+    const icons = { success: 'fa-check-circle', danger: 'fa-exclamation-circle', warning: 'fa-exclamation-triangle', info: 'fa-info-circle' };
+    const t = document.createElement('div');
+    t.className = 'sms-toast ' + (type || 'info');
+    t.innerHTML = `<span class="icon"><i class="fas ${icons[type] || icons.info}"></i></span><div class="content"></div>
+      <button class="close-btn">&times;</button>`;
+    t.querySelector('.content').textContent = msg;
+    t.querySelector('.close-btn').addEventListener('click', () => t.remove());
+    $('smsToastArea').appendChild(t);
+    setTimeout(() => t.remove(), 5000);
+  }
+
+  // ========== FECHAS ==========
+  // Hora de Colombia sin zona ('AAAA-MM-DD HH:MM[:SS]' o con T): se muestra tal cual.
+  function fmtColombia(texto) {
+    if (!texto) return '—';
+    const m = String(texto).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : String(texto);
+  }
+  // Fecha guardada en UTC sin zona (fecha_ejecucion de SMS) → hora de Colombia.
+  function fmtUtc(texto) {
+    if (!texto) return '—';
+    const d = new Date(String(texto).replace(' ', 'T') + 'Z');
+    if (isNaN(d)) return String(texto);
+    return d.toLocaleString('es-CO', { timeZone: 'America/Bogota', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  function msColombia(texto) { return texto ? Date.parse(String(texto).replace(' ', 'T').slice(0, 19) + '-05:00') || 0 : 0; }
+  function msUtc(texto) { return texto ? Date.parse(String(texto).replace(' ', 'T').slice(0, 19) + 'Z') || 0 : 0; }
+
+  const ESTADOS = {
+    pendiente:  ['Pendiente',  'fa-hourglass-half',       'warning'],
+    enviando:   ['Enviando',   'fa-spinner',              'info'],
+    enviado:    ['Enviado',    'fa-check-circle',         'success'],
+    completado: ['Completado', 'fa-check-double',         'success'],
+    error:      ['Error',      'fa-exclamation-triangle', 'danger'],
+    fallido:    ['Fallido',    'fa-times-circle',         'danger'],
+    cancelado:  ['Cancelado',  'fa-ban',                  'secondary']
+  };
+  function badgeEstado(estado) {
+    const [txt, icono, color] = ESTADOS[estado] || [estado || '?', 'fa-question', 'secondary'];
+    return `<span class="badge badge-${color}"><i class="fas ${icono}"></i> ${esc(txt)}</span>`;
+  }
+
+  // ========== DATOS: SMS y email al mismo formato ==========
+  function desdeSms(p) {
+    const recurrente = p.tipo_programacion === 'recurrente';
+    return {
+      canal: 'sms', id: String(p.id), etiquetaId: '#' + p.id,
+      campana: p.campana || '', usuario: p.usuario || '',
+      tipo: recurrente ? 'recurrente' : 'simple',
+      mensaje: p.plantilla || '', asunto: '',
+      cuando: recurrente ? esc(ValoroHorarios.texto(p.hora_inicio, p.intervalo_minutos, p.hora_fin)) : fmtColombia(p.fecha_programada),
+      cuandoDetalle: recurrente ? (p.fecha_fin ? 'Hasta el ' + p.fecha_fin : 'Sin fecha de fin') : 'Una sola vez',
+      estado: p.estado, error: p.ultimo_error || '',
+      ejecutada: !!p.fecha_ejecucion, ejecucion: fmtUtc(p.fecha_ejecucion),
+      enviados: p.ultimo_enviados, destinatarios: p.total_destinatarios,
+      consulta: p.origen === 'excel' ? '' : (p.consulta_sql || ''), origen: p.origen,
+      idMensaje: p.id_mensaje || '', idCampana: p.id_campana || '',
+      orden: msUtc(p.fecha_creacion),
+      puedeEditar: true,
+      puedeCancelar: p.estado === 'pendiente',
+      puedeReintentar: ['fallido', 'error', 'cancelado'].includes(p.estado),
+      puedeEliminar: ['pendiente', 'completado', 'fallido', 'error', 'cancelado'].includes(p.estado),
+      raw: p
+    };
+  }
+  function desdeEmail(p) {
+    const recurrente = p.tipo === 'recurrente';
+    return {
+      canal: 'email', id: String(p.id), etiquetaId: String(p.id).slice(0, 8),
+      campana: p.campana || '', usuario: p.usuario || '',
+      tipo: recurrente ? 'recurrente' : 'simple',
+      mensaje: p.plantilla || '', asunto: p.asunto || '',
+      cuando: recurrente ? esc(ValoroHorarios.texto(p.hora_inicio, p.intervalo_minutos, p.hora_fin)) : fmtColombia(p.fecha_programada),
+      cuandoDetalle: recurrente ? (p.fecha_fin ? 'Hasta el ' + p.fecha_fin : 'Sin fecha de fin') : 'Una sola vez',
+      estado: p.estado, error: p.ultimo_error || '',
+      ejecutada: !!p.fecha_ejecucion, ejecucion: fmtColombia(p.fecha_ejecucion),
+      enviados: p.ultimo_enviados, destinatarios: null,
+      consulta: p.consulta_sql || '', origen: 'consulta',
+      idMensaje: '', idCampana: '',
+      orden: msColombia(p.fecha_creacion),
+      puedeEditar: !['enviando', 'enviado'].includes(p.estado),
+      puedeCancelar: p.estado === 'pendiente',
+      puedeReintentar: ['error', 'cancelado'].includes(p.estado),
+      puedeEliminar: p.estado !== 'enviando',
+      raw: p
+    };
+  }
+
+  let TODAS = [];
+  let avisos = [];
+
+  async function cargar() {
+    $('hpLista').innerHTML = '<div class="hp-vacio"><i class="fas fa-spinner fa-spin"></i><p>Cargando programaciones...</p></div>';
+    $('hpFooter').style.display = 'none';
+    avisos = [];
+    const [sms, email] = await Promise.allSettled([
+      fetch('/api/sms/programaciones').then(r => r.json()),
+      fetch('/api/email/programaciones').then(r => r.json())
+    ]);
+    const filas = [];
+    if (sms.status === 'fulfilled' && sms.value.success !== false) filas.push(...(sms.value.data || sms.value.items || []).map(desdeSms));
+    else avisos.push('No se pudieron cargar las programaciones SMS.');
+    if (email.status === 'fulfilled' && email.value.success !== false) filas.push(...(email.value.items || []).map(desdeEmail));
+    else avisos.push('No se pudieron cargar las programaciones de email.');
+    TODAS = filas.sort((a, b) => b.orden - a.orden);
+    $('hpHora').textContent = new Date().toLocaleString('es-CO');
+    avisos.forEach(a => toast(a, 'danger'));
+    pintar();
+  }
+
+  function filtradas() {
+    const canal = $('fCanal').value, estado = $('fEstado').value, tipo = $('fTipo').value, ejec = $('fEjecucion').value;
+    const q = $('fBuscar').value.trim().toLowerCase();
+    return TODAS.filter(p =>
+      (!canal || p.canal === canal) &&
+      (!estado || p.estado === estado || (estado === 'error' && p.estado === 'fallido')) &&
+      (!tipo || p.tipo === tipo) &&
+      (!ejec || (ejec === 'si') === p.ejecutada) &&
+      (!q || `${p.id} ${p.campana} ${p.mensaje} ${p.asunto} ${p.usuario} ${p.idMensaje} ${p.idCampana}`.toLowerCase().includes(q)));
+  }
+
+  // Chips por estado (de todas): al hacer clic filtran.
+  function pintarResumen() {
+    const conteo = {};
+    TODAS.forEach(p => { conteo[p.estado] = (conteo[p.estado] || 0) + 1; });
+    const actual = $('fEstado').value;
+    const chip = (valor, texto, n) =>
+      `<button type="button" class="prog-chip ${actual === valor ? 'activo' : ''}" data-estado="${valor}">${texto} <span class="num">${n}</span></button>`;
+    $('hpResumen').innerHTML = chip('', 'Todas', TODAS.length) +
+      Object.keys(ESTADOS).filter(e => conteo[e]).map(e => chip(e, ESTADOS[e][0], conteo[e])).join('');
+    $('hpResumen').querySelectorAll('.prog-chip').forEach(b => b.addEventListener('click', () => {
+      $('fEstado').value = b.dataset.estado; pintar();
+    }));
+  }
+
+  function textoMensaje(p) {
+    if (p.canal === 'email') return p.asunto ? 'Asunto: ' + p.asunto : '(sin asunto)';
+    return p.mensaje;
+  }
+
+  function celdaEjecucion(p) {
+    if (!p.ejecutada) {
+      return p.estado === 'cancelado'
+        ? '<span class="no">No</span><small>Cancelada</small>'
+        : '<span class="no">No</span><small>Aún no se ejecuta</small>';
+    }
+    const enviados = p.enviados ?? '—';
+    return `<span class="si"><i class="fas fa-check"></i> Sí</span><small>${esc(p.ejecucion)}</small><small>${enviados} enviados${p.destinatarios ? ' de ' + p.destinatarios : ''}</small>`;
+  }
+
+  function pintar() {
+    pintarResumen();
+    const filas = filtradas();
+    $('hpTotal').textContent = filas.length;
+    $('hpTodas').textContent = TODAS.length;
+    $('hpFooter').style.display = TODAS.length ? 'flex' : 'none';
+    if (!filas.length) {
+      $('hpLista').innerHTML = `<div class="hp-vacio"><i class="fas fa-inbox"></i>
+        <p>${TODAS.length ? 'Ninguna programación con esos filtros.' : 'No hay programaciones registradas.'}</p></div>`;
+      return;
+    }
+    $('hpLista').innerHTML = `
+      <table class="table hp-tabla">
+        <thead><tr>
+          <th>ID</th><th>Canal</th><th>Campaña</th><th>Mensaje</th><th>Tipo</th>
+          <th>Fecha / hora</th><th>¿Se ejecutó?</th><th>Estado</th><th style="text-align:center;">Acciones</th>
+        </tr></thead>
+        <tbody>${filas.map(p => `
+          <tr>
+            <td><code class="hp-id" title="${esc(p.id)}">${esc(p.etiquetaId)}</code></td>
+            <td><span class="badge hp-canal-${p.canal}"><i class="fas ${p.canal === 'sms' ? 'fa-sms' : 'fa-envelope'}"></i> ${p.canal === 'sms' ? 'SMS' : 'Email'}</span></td>
+            <td class="hp-nombre">
+              <strong title="${esc(p.campana)}">${esc(p.campana) || 'Sin nombre'}</strong>
+              <small>${esc(p.usuario) || 'Sin responsable'}${p.idCampana || p.idMensaje ? ' · ' + esc([p.idCampana, p.idMensaje].filter(Boolean).join(' / ')) : ''}</small>
+            </td>
+            <td><div class="hp-mensaje ver-btn" data-clave="${p.canal}:${esc(p.id)}" title="Ver el mensaje completo">${esc(textoMensaje(p)) || '—'}</div></td>
+            <td>${p.tipo === 'recurrente'
+                ? '<span class="badge badge-info"><i class="fas fa-sync-alt"></i> Recurrente</span>'
+                : '<span class="badge badge-primary"><i class="fas fa-clock"></i> Simple</span>'}</td>
+            <td class="hp-cuando">${p.cuando}<small>${esc(p.cuandoDetalle)}</small></td>
+            <td class="hp-ejec">${celdaEjecucion(p)}</td>
+            <td>${badgeEstado(p.estado)}${p.error ? `<div class="hp-error" title="${esc(p.error)}">${esc(p.error.length > 120 ? p.error.slice(0, 120) + '…' : p.error)}</div>` : ''}</td>
+            <td style="text-align:center;">
+              <div class="hp-acciones">
+                <button class="btn btn-outline-secondary btn-sm ver-btn" data-clave="${p.canal}:${esc(p.id)}" title="Ver"><i class="fas fa-eye"></i></button>
+                ${p.puedeEditar ? `<button class="btn btn-outline-primary btn-sm editar-btn" data-clave="${p.canal}:${esc(p.id)}" title="Editar"><i class="fas fa-edit"></i></button>` : ''}
+                ${p.puedeCancelar ? `<button class="btn btn-outline-warning btn-sm cancelar-btn" data-clave="${p.canal}:${esc(p.id)}" title="Cancelar"><i class="fas fa-ban"></i></button>` : ''}
+                ${p.puedeReintentar ? `<button class="btn btn-outline-success btn-sm reintentar-btn" data-clave="${p.canal}:${esc(p.id)}" title="Reintentar"><i class="fas fa-redo-alt"></i></button>` : ''}
+                ${p.puedeEliminar ? `<button class="btn btn-outline-danger btn-sm eliminar-btn" data-clave="${p.canal}:${esc(p.id)}" title="Eliminar"><i class="fas fa-trash"></i></button>` : ''}
+              </div>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+    const lista = $('hpLista');
+    lista.querySelectorAll('.ver-btn').forEach(b => b.addEventListener('click', () => abrirVer(buscar(b.dataset.clave))));
+    lista.querySelectorAll('.editar-btn').forEach(b => b.addEventListener('click', () => abrirEditar(buscar(b.dataset.clave))));
+    lista.querySelectorAll('.cancelar-btn').forEach(b => b.addEventListener('click', () => accion(buscar(b.dataset.clave), 'cancelar')));
+    lista.querySelectorAll('.reintentar-btn').forEach(b => b.addEventListener('click', () => accion(buscar(b.dataset.clave), 'reintentar')));
+    lista.querySelectorAll('.eliminar-btn').forEach(b => b.addEventListener('click', () => accion(buscar(b.dataset.clave), 'eliminar')));
+  }
+
+  function buscar(clave) {
+    const i = clave.indexOf(':');
+    const canal = clave.slice(0, i), id = clave.slice(i + 1);
+    return TODAS.find(p => p.canal === canal && p.id === id);
+  }
+
+  // ========== API (rutas de cada canal) ==========
+  async function llamar(url, method, body) {
+    const opciones = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body !== undefined) opciones.body = JSON.stringify(body);
+    const resp = await fetch(url, opciones);
+    let data = {};
+    try { data = await resp.json(); } catch (e) { /* respuesta sin JSON */ }
+    if (!resp.ok || data.success === false) throw new Error(data.message || data.error || `Error HTTP ${resp.status}`);
+    return data;
+  }
+
+  const RUTAS = {
+    sms: {
+      base: id => `/api/sms/programaciones/${encodeURIComponent(id)}`,
+      cancelar: id => `/api/sms/programaciones/${encodeURIComponent(id)}/cancelar`,
+      reintentar: id => `/api/sms/programaciones/${encodeURIComponent(id)}/reejecutar`
+    },
+    email: {
+      base: id => `/api/email/programaciones/${encodeURIComponent(id)}`,
+      cancelar: id => `/api/email/programaciones/${encodeURIComponent(id)}/cancelar`,
+      reintentar: id => `/api/email/programaciones/${encodeURIComponent(id)}/reejecutar`
+    }
+  };
+
+  async function accion(p, que) {
+    if (!p) return;
+    const nombre = `${p.canal === 'sms' ? 'SMS' : 'email'} ${p.etiquetaId} (${p.campana || 'sin nombre'})`;
+    const preguntas = {
+      cancelar: `¿Cancelar la programación ${nombre}? No se enviará.`,
+      reintentar: `¿Reintentar la programación ${nombre}? Queda pendiente y se ejecuta de nuevo.`,
+      eliminar: `¿Eliminar permanentemente la programación ${nombre}? No se puede recuperar.`
+    };
+    if (!confirm(preguntas[que])) return;
+    try {
+      const r = RUTAS[p.canal];
+      if (que === 'eliminar') await llamar(r.base(p.id), 'DELETE');
+      else await llamar(r[que](p.id), 'POST');
+      toast({ cancelar: 'Programación cancelada', reintentar: 'Reintento programado', eliminar: 'Programación eliminada' }[que], 'success');
+      cargar();
+    } catch (e) { toast(e.message, 'danger'); }
+  }
+
+  // ========== VER ==========
+  let viendo = null;
+  function abrirVer(p) {
+    if (!p) return;
+    viendo = p;
+    $('verTitulo').textContent = `${p.canal === 'sms' ? 'SMS' : 'Email'} ${p.etiquetaId} · ${p.campana || 'Sin nombre'}`;
+    const dato = (titulo, valor) => `<div><span>${titulo}</span>${valor}</div>`;
+    let html = `<div class="hp-detalle">
+      ${dato('Estado', badgeEstado(p.estado))}
+      ${dato('Tipo', p.tipo === 'recurrente' ? 'Recurrente (todos los días)' : 'Simple (una vez)')}
+      ${dato('Cuándo', `${p.cuando} · ${esc(p.cuandoDetalle)}`)}
+      ${dato('Responsable', esc(p.usuario) || '—')}
+      ${dato('¿Se ejecutó?', p.ejecutada ? `Sí, ${esc(p.ejecucion)}` : 'No')}
+      ${dato('Enviados (última ejecución)', p.ejecutada ? `${p.enviados ?? '—'}${p.destinatarios ? ' de ' + p.destinatarios : ''}` : '—')}
+      ${p.canal === 'sms' ? dato('ID del mensaje', esc(p.idMensaje) || '—') + dato('ID de la campaña', esc(p.idCampana) || '—') : ''}
+      ${p.canal === 'sms' && p.raw.link ? `<div style="grid-column:1/-1;"><span>Link (va en {{ '{{' }}Link{{ '}}' }})</span>${esc(p.raw.link)}</div>` : ''}
+      ${p.canal === 'sms' && p.raw.confirmar_reenvio ? dato('Reenvío', 'Confirmado (no excluye duplicados del día)') : ''}
+    </div>`;
+    if (p.error) html += `<div class="hp-bloque-titulo">Error de la última ejecución</div><div class="hp-texto" style="color:#B42318;">${esc(p.error)}</div>`;
+    if (p.canal === 'sms') {
+      html += `<div class="hp-bloque-titulo">Mensaje</div><div class="hp-texto">${esc(p.mensaje)}</div>`;
+    } else {
+      html += `<div class="hp-bloque-titulo">Asunto</div><div class="hp-texto">${esc(p.asunto) || '—'}</div>
+        <div class="hp-bloque-titulo">Mensaje</div><iframe class="hp-html" sandbox="" id="verHtml"></iframe>`;
+    }
+    html += `<div class="hp-bloque-titulo">Base</div>` + (p.origen === 'excel'
+      ? `<div class="hp-texto"><i class="fas fa-file-excel"></i> ${esc(p.raw.consulta_sql || 'Excel')}</div>`
+      : `<div class="hp-texto hp-sql">${esc(p.consulta) || '—'}</div>`);
+    $('verCuerpo').innerHTML = html;
+    // El HTML del email se muestra aislado (iframe sin scripts).
+    if (p.canal === 'email') $('verHtml').srcdoc = p.mensaje || '';
+    $('verEditar').style.display = p.puedeEditar ? '' : 'none';
+    $('verModal').classList.add('active');
+  }
+  $('verEditar').addEventListener('click', () => { cerrar('verModal'); abrirEditar(viendo); });
+
+  // ========== EDITAR ==========
+  let editando = null;
+  function mostrarCamposTipo() {
+    // SMS y email igual: simple = fecha y hora; recurrente = hora, repetir, hasta y fecha fin.
+    const recurrente = $('eTipo').value === 'recurrente';
+    $('eFilaSimple').style.display = recurrente ? 'none' : '';
+    $('eFilaRecurrente').style.display = recurrente ? '' : 'none';
+    mostrarTurnos();
+  }
+
+  // Repetir en el día (recurrente): "Hasta las" y las horas en que saldrá.
+  ValoroHorarios.llenarSelect($('eIntervalo'));
+  function mostrarTurnos() {
+    const visible = editando && $('eTipo').value === 'recurrente';
+    const intervalo = $('eIntervalo').value;
+    $('eHoraFinCampo').style.display = visible && intervalo ? '' : 'none';
+    $('eTurnos').style.display = visible ? '' : 'none';
+    if (!visible) return;
+    const horas = ValoroHorarios.horasDelDia($('eHora').value, intervalo, $('eHoraFin').value);
+    $('eTurnos').innerHTML = horas.length
+      ? `<span><i class="far fa-clock"></i> Sale a las: ${horas.join(', ')}</span>`
+      : '<span style="color:#B42318;"><i class="fas fa-exclamation-circle"></i> "Hasta las" debe ser después de la hora de envío.</span>';
+  }
+  ['eIntervalo', 'eHoraFin', 'eHora'].forEach(id => {
+    $(id).addEventListener('input', mostrarTurnos);
+    $(id).addEventListener('change', mostrarTurnos);
+  });
+  $('eTipo').addEventListener('change', mostrarCamposTipo);
+  $('eMensajeSms').addEventListener('input', () => { $('eLargoSms').textContent = `${$('eMensajeSms').value.length} caracteres`; });
+
+  function abrirEditar(p) {
+    if (!p) return;
+    editando = p;
+    const r = p.raw, sms = p.canal === 'sms', excel = p.origen === 'excel';
+    $('editTitulo').textContent = `Editar ${sms ? 'SMS' : 'email'} ${p.etiquetaId}`;
+    document.querySelectorAll('#editarModal .solo-canal').forEach(el => { el.style.display = el.dataset.canal === p.canal ? '' : 'none'; });
+    $('eCampana').value = p.campana;
+    $('eUsuario').value = p.usuario;
+    $('eTipo').value = p.tipo;
+    $('eTipo').disabled = excel;
+    $('eConsultaCampo').style.display = excel ? 'none' : '';
+    $('eExcelAviso').style.display = excel ? '' : 'none';
+    $('eConsulta').value = p.consulta;
+    if (sms) {
+      $('eIdMensaje').value = p.idMensaje;
+      $('eIdCampana').value = p.idCampana;
+      $('eLink').value = r.link || '';
+      $('eMensajeSms').value = p.mensaje;
+      $('eLargoSms').textContent = `${p.mensaje.length} caracteres`;
+      $('eFecha').value = r.fecha_programada ? r.fecha_programada.slice(0, 16) : '';
+      $('eHora').value = (r.hora_inicio || '').slice(0, 5);
+      $('eFechaFin').value = r.fecha_fin || '';
+      $('eIntervalo').value = r.intervalo_minutos ? String(r.intervalo_minutos) : '';
+      $('eHoraFin').value = r.hora_fin || '18:30';
+      $('eReenvio').checked = !!r.confirmar_reenvio;
+    } else {
+      $('eAsunto').value = p.asunto;
+      $('eReply').value = r.reply_email || '';
+      $('eHtml').value = p.mensaje;
+      $('eFecha').value = p.tipo === 'recurrente' ? '' : (r.fecha_programada || '').slice(0, 16).replace(' ', 'T');
+      $('eHora').value = (r.hora_inicio || '08:00').slice(0, 5);
+      $('eFechaFin').value = r.fecha_fin || '';
+      $('eIntervalo').value = r.intervalo_minutos ? String(r.intervalo_minutos) : '';
+      $('eHoraFin').value = r.hora_fin || '18:30';
+    }
+    mostrarCamposTipo();
+    $('editarModal').classList.add('active');
+  }
+
+  $('eGuardar').addEventListener('click', async function() {
+    const p = editando;
+    if (!p) return;
+    const sms = p.canal === 'sms', excel = p.origen === 'excel', tipo = $('eTipo').value;
+    let body;
+    const faltan = [];
+    if (!$('eCampana').value.trim()) faltan.push('nombre de la campaña');
+    if (!excel && !$('eConsulta').value.trim()) faltan.push('consulta SQL');
+    if (sms) {
+      body = {
+        campana: $('eCampana').value.trim(), usuario: $('eUsuario').value.trim(),
+        tipo_programacion: tipo, plantilla: $('eMensajeSms').value.trim(),
+        id_mensaje: $('eIdMensaje').value.trim(), id_campana: $('eIdCampana').value.trim(),
+        link: $('eLink').value.trim(),
+        hora_inicio: $('eHora').value || null, fecha_fin: $('eFechaFin').value || null,
+        intervalo_minutos: Number($('eIntervalo').value) || null,
+        hora_fin: $('eIntervalo').value ? ($('eHoraFin').value || null) : null,
+        fecha_programada: $('eFecha').value || null, confirmar_reenvio: $('eReenvio').checked
+      };
+      if (!excel) body.consulta_sql = $('eConsulta').value.trim();
+      if (!body.plantilla) faltan.push('mensaje');
+      if (tipo === 'simple' && !body.fecha_programada) faltan.push('fecha y hora de envío');
+      if (tipo === 'recurrente' && !body.hora_inicio) faltan.push('hora de envío');
+      if (tipo === 'recurrente' && body.intervalo_minutos && !body.hora_fin) faltan.push('hasta qué hora (Hasta las)');
+    } else {
+      body = {
+        campana: $('eCampana').value.trim(), query: $('eConsulta').value.trim(),
+        asunto: $('eAsunto').value.trim(), reply_email: $('eReply').value.trim(),
+        plantilla: $('eHtml').value.trim(), usuario: $('eUsuario').value.trim(), tipo,
+        fecha_programada: $('eFecha').value || null,
+        hora_inicio: $('eHora').value || null, fecha_fin: $('eFechaFin').value || null,
+        intervalo_minutos: Number($('eIntervalo').value) || null,
+        hora_fin: $('eIntervalo').value ? ($('eHoraFin').value || null) : null
+      };
+      if (!body.asunto) faltan.push('asunto');
+      if (!body.plantilla) faltan.push('mensaje (contenido HTML)');
+      if (tipo === 'simple' && !body.fecha_programada) faltan.push('fecha y hora de envío');
+      if (tipo === 'recurrente' && !body.hora_inicio) faltan.push('hora de envío');
+      if (tipo === 'recurrente' && body.intervalo_minutos && !body.hora_fin) faltan.push('hasta qué hora (Hasta las)');
+    }
+    if (faltan.length) { toast('Faltan datos obligatorios: ' + faltan.join(', '), 'warning'); return; }
+
+    this.disabled = true;
+    this.innerHTML = '<span class="spinner-sm"></span> Guardando...';
+    try {
+      await llamar(RUTAS[p.canal].base(p.id), 'PATCH', body);
+      toast('Programación actualizada', 'success');
+      cerrar('editarModal');
+      cargar();
+    } catch (e) {
+      toast(e.message, 'danger');
+    } finally {
+      this.disabled = false;
+      this.innerHTML = '<i class="fas fa-save"></i> Guardar cambios';
+    }
+  });
+
+  // ========== MODALES, FILTROS Y MENÚ NUEVA ==========
+  function cerrar(id) { $(id).classList.remove('active'); }
+  document.querySelectorAll('[data-cerrar]').forEach(b => b.addEventListener('click', () => cerrar(b.dataset.cerrar)));
+  ['verModal', 'editarModal'].forEach(id => $(id).addEventListener('click', e => { if (e.target.id === id) cerrar(id); }));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { cerrar('verModal'); cerrar('editarModal'); } });
+
+  ['fCanal', 'fEstado', 'fTipo', 'fEjecucion'].forEach(id => $(id).addEventListener('change', pintar));
+  $('fBuscar').addEventListener('input', pintar);
+  $('btnRefrescar').addEventListener('click', cargar);
+  $('btnNueva').addEventListener('click', e => { e.stopPropagation(); $('hpNueva').classList.toggle('abierto'); });
+  document.addEventListener('click', () => $('hpNueva').classList.remove('abierto'));
+
+  cargar();
+})();
+</script>
+{% endblock %}

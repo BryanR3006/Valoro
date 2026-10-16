@@ -100,19 +100,9 @@ Si una ejecución programada falla queda en estado **error** con el mensaje del 
 
 ## Tablas en BigQuery
 
-- `Temporal.SmsLog` (cada SMS), `Temporal.SmsInfobip` (copia de Infobip para el dashboard), `Temporal.EmailLog`, `Temporal.ProgramacionEmail_Valoro`. Esquemas de SMS en `sms_bigquery_schema.sql`.
+- `Temporal.SmsLog` (cada SMS), `Temporal.SmsInfobip_Valoro` (copia de Infobip para el dashboard), `Temporal.EmailLog`. Esquemas de SMS en `sms_bigquery_schema.sql`.
 - Inicio cuenta lo de hoy (hora de Colombia) con `campana` y `fecha_envio` de `SmsLog` y `EmailLog`. Una programación de email "ya corrió" si `EmailLog` tiene envíos de hoy con su mismo nombre de campaña (si dos programaciones usan el mismo nombre, se suman). Las de SMS salen de SQLite (`fecha_ejecucion`, `ultimo_enviados`, `ultimo_error`). No hace falta cambiar tablas de BigQuery.
-- Las programaciones de email de Valoro van en su propia tabla `Temporal.ProgramacionEmail_Valoro` (la de QNT es otra, para que una app no envíe las de la otra). Crearla una vez:
-
-  ```sql
-  CREATE TABLE IF NOT EXISTS `capable-arbor-209819.Temporal.ProgramacionEmail_Valoro` (
-    id STRING, fecha_programada TIMESTAMP, consulta_sql STRING, plantilla STRING, asunto STRING,
-    campana STRING, estado STRING, usuario STRING, reply_email STRING,
-    fecha_creacion TIMESTAMP, fecha_actualizacion TIMESTAMP,
-    tipo STRING,          -- simple o recurrente
-    ultimo_error STRING   -- mensaje del fallo
-  );
-  ```
+- Las programaciones de email están en SQLite (`app.db`, tabla `programaciones_email`), igual que las de SMS: se crean, editan, cancelan y eliminan desde *Email → Programaciones*. BigQuery solo se usa para leer la base de la consulta al enviar. La tabla vieja `Temporal.ProgramacionEmail_Valoro` ya no se usa.
 
 - Email recurrente: sale todos los días a la hora de `fecha_programada`. Después de cada envío queda `pendiente` para el día siguiente. Si falla queda en `error` y se reactiva al editarla.
 
@@ -122,7 +112,7 @@ Si una ejecución programada falla queda en estado **error** con el mensaje del 
 |---|---|
 | `app.py` | Rutas web y jobs del scheduler (SMS, email, dashboard SMS). |
 | `backend.py` | Crea la app Flask, la base SQLite, los logs y el scheduler (`America/Bogota`). `APP_NOMBRE` = nombre en la interfaz. |
-| `database.py` | Modelos: `ProgramacionSms`, `MensajeOperacion` (plantillas SMS, tabla `Mensajes_`, con `Momento`), `PlantillaEmail` (con `momento`). Columnas nuevas: se agregan solas al arrancar (`_ensure_programacion_sms_columns()`, `_ensure_momento_columns()`). |
+| `database.py` | Modelos: `ProgramacionSms`, `MensajeOperacion` (plantillas SMS, tabla `Mensajes_`, con `Momento`), `PlantillaEmail` (con `momento`), `ProgramacionEmail` (programaciones de email). Columnas nuevas: se agregan solas al arrancar (`_ensure_programacion_sms_columns()`, `_ensure_momento_columns()`). |
 | `services/sms_service.py` | Envío Infobip, variables, lista negra, duplicados, SmsLog, polling de estados. |
 | `services/sms_excel.py`, `services/sms_exclusiones.py` | Base SMS desde Excel (links fijos por Id Mensaje en `LINK_POR_ID_MENSAJE`, vacío hasta tener los de Valoro); exclusiones del equipo de SMS. |
 | `services/email_service.py`, `services/email_client.py` | Envío de email (contactos, lista, campaña), lista negra, EmailLog, plantillas. |

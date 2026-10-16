@@ -13,7 +13,7 @@
 <style>
   .em-container {
     display: grid;
-    grid-template-columns: 1fr 420px;
+    grid-template-columns: 1fr 480px;
     gap: 24px;
     align-items: start;
   }
@@ -60,18 +60,6 @@
 
   .em-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
 
-  .em-schedule-row {
-    display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;
-    background: var(--bg-code); border: 1.5px dashed var(--border);
-    border-radius: 12px; padding: 16px 18px; margin-bottom: 20px;
-  }
-  .em-schedule-row .form-group {
-    margin-bottom: 0; flex: 1; min-width: 180px;
-  }
-  .em-schedule-row .form-group label {
-    font-weight: 600; font-size: 0.78rem; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;
-  }
   .em-side { position: sticky; top: 84px; display: flex; flex-direction: column; gap: 16px; }
 
   /* FLAG DE DUPLICADOS */
@@ -100,9 +88,7 @@
     padding: 12px 16px; font-size: 0.8rem; font-weight: 700;
     display: flex; justify-content: space-between; align-items: center;
   }
-  .em-preview-box .preview-body {
-    padding: 0; max-height: 600px; overflow-y: auto; font-size: 0.8rem;
-  }
+  .em-preview-box .preview-body { padding: 0; font-size: 0.8rem; }
   .em-preview-box .preview-nav { display: flex; align-items: center; gap: 6px; }
   .em-preview-box .preview-nav button {
     background: rgba(255,255,255,0.15); border: 0; color: #fff; border-radius: 4px;
@@ -118,7 +104,22 @@
     padding: 8px 16px; font-size: 0.78rem; background: #FFF4E0; color: #8A5300;
     border-bottom: 1px solid var(--border);
   }
-  .em-preview-box iframe { width: 100%; height: 560px; border: 0; display: block; background: #fff; }
+  /* El correo se pinta a su ancho real (unos 600 px) y se escala al ancho de la caja:
+     se ve completo, sin recortes. El alto sigue al contenido (con scroll si es muy largo). */
+  .em-marco { position: relative; overflow-x: hidden; overflow-y: auto; max-height: 78vh; background: #fff; }
+  .em-marco iframe { border: 0; display: block; background: #fff; transform-origin: 0 0; width: 100%; height: 560px; }
+  .em-preview-box .preview-tools { display: flex; gap: 6px; align-items: center; }
+  .em-preview-box .preview-tools .btn-ampliar {
+    background: rgba(255,255,255,0.15); border: 0; color: #fff; border-radius: 4px;
+    height: 24px; padding: 0 8px; font-size: 0.72rem; font-weight: 700; cursor: pointer;
+  }
+  .em-preview-box .preview-tools .btn-ampliar:hover { background: rgba(255,255,255,0.28); }
+  #ampliarModal .modal-box { max-width: 920px; width: 96vw; }
+  #ampliarModal .modal-body { padding: 0; }
+  #ampliarModal .em-marco { max-height: 80vh; }
+  .pl-filtro { padding: 8px 16px; border-bottom: 1px solid var(--border); background: #F8F9FC; display: flex; gap: 8px; }
+  .pl-filtro select { flex: 1; border: 1px solid var(--border); border-radius: 6px; font-size: 0.78rem; padding: 4px 8px; }
+  .pl-acciones { padding: 10px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; }
 
   /* ESTADÍSTICAS */
   .em-stats {
@@ -163,9 +164,6 @@
     border-radius: 50%; animation: spin 0.7s linear infinite;
   }
 
-  @media (max-width: 768px) {
-    .em-schedule-row { flex-direction: column; align-items: stretch; }
-  }
 </style>
 {% endblock %}
 
@@ -286,22 +284,44 @@
           </span>
         </div>
 
-        <!-- PROGRAMAR -->
-        <div class="em-schedule-row solo-programar">
-          <div class="form-group">
-            <label for="fechaProgramada"><i class="far fa-calendar-alt"></i> Programar envío</label>
-            <input id="fechaProgramada" type="datetime-local" class="form-control">
+        <!-- CUÁNDO (solo Programaciones email; igual que SMS) -->
+        <div class="sms-auto-section solo-programar" id="horarioNuevo">
+          <div class="section-title"><i class="far fa-calendar-alt"></i> Cuándo se envía</div>
+          <div class="sms-cuando">
+            <div class="sms-field">
+              <label for="tipoProgramacion">Tipo</label>
+              <select id="tipoProgramacion" class="form-control" data-h="tipo">
+                <option value="simple">Simple (una vez)</option>
+                <option value="recurrente">Recurrente (todos los días)</option>
+              </select>
+            </div>
+            <div class="sms-field h-simple">
+              <label for="fechaProgramada">Fecha</label>
+              <input id="fechaProgramada" type="date" class="form-control" data-h="fecha">
+            </div>
+            <div class="sms-field h-simple">
+              <label for="horaProgramada">Hora</label>
+              <input id="horaProgramada" type="time" class="form-control" value="08:00" data-h="hora">
+            </div>
+            <div class="sms-field h-recurrente" style="display:none;">
+              <label for="horaRecurrente">Hora de envío</label>
+              <input id="horaRecurrente" type="time" class="form-control" value="08:00" data-h="horaInicio">
+            </div>
+            <div class="sms-field h-recurrente" style="display:none;">
+              <label for="intervaloRecurrente">Repetir en el día</label>
+              <select id="intervaloRecurrente" class="form-control" data-h="intervalo"></select>
+            </div>
+            <div class="sms-field h-recurrente h-intervalo" style="display:none;">
+              <label for="horaFinRecurrente">Hasta las</label>
+              <input id="horaFinRecurrente" type="time" class="form-control" value="18:30" data-h="horaFin">
+            </div>
+            <div class="sms-field h-recurrente" style="display:none;">
+              <label for="fechaLimite">Fecha fin (opcional)</label>
+              <input id="fechaLimite" type="date" class="form-control" data-h="fechaFin">
+            </div>
           </div>
-          <div class="form-group">
-            <label for="tipoProgramacion"><i class="fas fa-redo"></i> Tipo</label>
-            <select id="tipoProgramacion" class="form-control">
-              <option value="simple">Simple (una vez)</option>
-              <option value="recurrente">Recurrente (todos los días a esa hora)</option>
-            </select>
-          </div>
-          <button id="scheduleBtn" class="btn btn-primary">
-            <i class="fas fa-calendar-check"></i> Programar
-          </button>
+          <div class="sms-turnos h-recurrente" data-h="turnos" style="display:none;"></div>
+          <div class="sms-help"><span><i class="fas fa-info-circle"></i> Recurrente: sale todos los días a esa hora (o cada cierto tiempo hasta la hora "Hasta las") hasta la fecha fin. Los turnos de hoy que ya pasaron no salen.</span></div>
         </div>
 
         <!-- BOTONES -->
@@ -311,6 +331,9 @@
           </button>
           <button id="sendBtn" class="btn btn-success solo-enviar" disabled>
             <i class="fas fa-paper-plane"></i> Enviar Email
+          </button>
+          <button id="scheduleBtn" class="btn btn-primary solo-programar">
+            <i class="fas fa-calendar-check"></i> Programar
           </button>
           <button id="clearBtn" class="btn btn-outline-secondary">
             <i class="fas fa-undo"></i> Limpiar
@@ -368,22 +391,29 @@
               </select>
               <textarea id="editProgPlantilla" class="form-control textarea-html" rows="5"></textarea>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-              <div class="em-field">
-                <label>Fecha y hora de envío <span class="badge-required">requerido</span></label>
-                <input id="editProgFecha" type="datetime-local" class="form-control">
+            <div class="em-field">
+              <label>Responsable</label>
+              <input id="editProgUsuario" class="form-control">
+            </div>
+            <!-- Cuándo: mismos campos que al crear (y que SMS) -->
+            <div class="sms-auto-section" id="horarioEdicion">
+              <div class="section-title"><i class="far fa-calendar-alt"></i> Cuándo se envía</div>
+              <div class="sms-cuando">
+                <div class="sms-field">
+                  <label>Tipo</label>
+                  <select class="form-control" data-h="tipo">
+                    <option value="simple">Simple (una vez)</option>
+                    <option value="recurrente">Recurrente (todos los días)</option>
+                  </select>
+                </div>
+                <div class="sms-field h-simple"><label>Fecha</label><input type="date" class="form-control" data-h="fecha"></div>
+                <div class="sms-field h-simple"><label>Hora</label><input type="time" class="form-control" data-h="hora"></div>
+                <div class="sms-field h-recurrente"><label>Hora de envío</label><input type="time" class="form-control" data-h="horaInicio"></div>
+                <div class="sms-field h-recurrente"><label>Repetir en el día</label><select class="form-control" data-h="intervalo"></select></div>
+                <div class="sms-field h-recurrente h-intervalo"><label>Hasta las</label><input type="time" class="form-control" data-h="horaFin"></div>
+                <div class="sms-field h-recurrente"><label>Fecha fin (opcional)</label><input type="date" class="form-control" data-h="fechaFin"></div>
               </div>
-              <div class="em-field">
-                <label>Responsable</label>
-                <input id="editProgUsuario" class="form-control">
-              </div>
-              <div class="em-field">
-                <label>Tipo</label>
-                <select id="editProgTipo" class="form-control">
-                  <option value="simple">Simple (una vez)</option>
-                  <option value="recurrente">Recurrente (todos los días a esa hora)</option>
-                </select>
-              </div>
+              <div class="sms-turnos h-recurrente" data-h="turnos"></div>
             </div>
             <div class="em-actions" style="margin-top:6px;">
               <button id="editProgGuardar" class="btn btn-success"><i class="fas fa-save"></i> Guardar cambios</button>
@@ -391,7 +421,7 @@
             </div>
           </div>
         </div>
-        <div class="table-responsive" id="scheduledResult">
+        <div id="scheduledResult">
           <div class="text-center text-muted py-4">
             <div class="spinner"></div>
             <div class="mt-2">Cargando programaciones...</div>
@@ -436,10 +466,13 @@
     <div class="em-preview-box" id="previewBox" style="display:none;">
       <div class="preview-header">
         <span><i class="fas fa-eye"></i> Vista previa con datos de la consulta</span>
-        <span class="preview-nav">
-          <button type="button" id="previewPrev" title="Cliente anterior">&lsaquo;</button>
-          <span id="previewCount" style="font-size:0.75rem;opacity:0.85;"></span>
-          <button type="button" id="previewNext" title="Cliente siguiente">&rsaquo;</button>
+        <span class="preview-tools">
+          <span class="preview-nav">
+            <button type="button" id="previewPrev" title="Cliente anterior">&lsaquo;</button>
+            <span id="previewCount" style="font-size:0.75rem;opacity:0.85;"></span>
+            <button type="button" id="previewNext" title="Cliente siguiente">&rsaquo;</button>
+          </span>
+          <button type="button" class="btn-ampliar" id="previewAmpliar" title="Ver en grande"><i class="fas fa-expand"></i> Ampliar</button>
         </span>
       </div>
       <div class="preview-meta">
@@ -447,7 +480,44 @@
         <div><strong>Asunto:</strong> <span id="previewAsunto"></span></div>
       </div>
       <div class="preview-aviso" id="previewAviso" style="display:none;"></div>
-      <div class="preview-body"><iframe id="previewContent" sandbox="" title="Vista previa del correo"></iframe></div>
+      <div class="preview-body em-marco" id="previewMarco"><iframe id="previewContent" sandbox="allow-same-origin" title="Vista previa del correo"></iframe></div>
+    </div>
+
+    <!-- PLANTILLAS DE EMAIL: carrusel para ver todas las guardadas -->
+    <div class="em-preview-box" id="plantillasBox">
+      <div class="preview-header">
+        <span><i class="fas fa-layer-group"></i> Plantillas de email</span>
+        <span class="preview-tools">
+          <span class="preview-nav">
+            <button type="button" id="plPrev" title="Plantilla anterior">&lsaquo;</button>
+            <span id="plCount" style="font-size:0.75rem;opacity:0.85;">—</span>
+            <button type="button" id="plNext" title="Plantilla siguiente">&rsaquo;</button>
+          </span>
+          <button type="button" class="btn-ampliar" id="plAmpliar" title="Ver en grande"><i class="fas fa-expand"></i> Ampliar</button>
+        </span>
+      </div>
+      <div class="pl-filtro"><select id="plMomento"><option value="">Todos los momentos</option></select></div>
+      <div class="preview-meta">
+        <div><strong>Plantilla:</strong> <span id="plNombre">—</span></div>
+        <div><strong>Momento:</strong> <span id="plMomentoTxt">—</span> · <span id="plUsos"></span></div>
+        <div><strong>Asunto:</strong> <span id="plAsunto">—</span></div>
+      </div>
+      <div class="em-marco" id="plMarco"><iframe id="plContent" sandbox="allow-same-origin" title="Plantilla de email"></iframe></div>
+      <div class="pl-acciones">
+        <a href="/email/plantillas" class="btn btn-outline-secondary btn-sm"><i class="fas fa-file-alt"></i> Administrar</a>
+        <button type="button" class="btn btn-primary btn-sm" id="plUsar"><i class="fas fa-check"></i> Usar esta plantilla</button>
+      </div>
+    </div>
+
+    <!-- VER EN GRANDE -->
+    <div class="modal-overlay" id="ampliarModal">
+      <div class="modal-box">
+        <div class="modal-header">
+          <h3><i class="fas fa-envelope-open-text"></i> <span id="ampliarTitulo">Vista previa</span></h3>
+          <button class="modal-close" id="ampliarCerrar">&times;</button>
+        </div>
+        <div class="modal-body"><div class="em-marco" id="ampliarMarco"><iframe sandbox="allow-same-origin" title="Vista previa en grande"></iframe></div></div>
+      </div>
     </div>
   </div>
 
@@ -469,7 +539,6 @@
   const usuarioEl = document.getElementById('usuario');
   const replyEmailEl = document.getElementById('replyEmail');
   const confirmarReenvioEl = document.getElementById('confirmarReenvio');
-  const fechaProgramadaEl = document.getElementById('fechaProgramada');
   const plantillaSelEl = document.getElementById('plantillaSel');
   let plantillasGuardadas = [];
   
@@ -511,6 +580,71 @@
     return div.innerHTML;
   }
 
+  // ========== HORARIO (igual que SMS) ==========
+  // Simple: fecha y hora. Recurrente: hora de envío, repetir en el día, "Hasta las"
+  // y fecha fin. Lo usan el formulario de crear y el de editar (data-h="...").
+  function crearHorario(caja) {
+    const el = nombre => caja.querySelector(`[data-h="${nombre}"]`);
+    ValoroHorarios.llenarSelect(el('intervalo'));
+    function mostrar() {
+      const recurrente = el('tipo').value === 'recurrente';
+      caja.querySelectorAll('.h-simple').forEach(e => e.style.display = recurrente ? 'none' : '');
+      caja.querySelectorAll('.h-recurrente').forEach(e => e.style.display = recurrente ? '' : 'none');
+      caja.querySelectorAll('.h-intervalo').forEach(e => e.style.display = recurrente && el('intervalo').value ? '' : 'none');
+      if (!recurrente) return;
+      const horas = ValoroHorarios.horasDelDia(el('horaInicio').value, el('intervalo').value, el('horaFin').value);
+      const turnos = el('turnos');
+      turnos.classList.toggle('invalido', !horas.length);
+      turnos.innerHTML = horas.length
+        ? '<i class="far fa-clock"></i> Sale todos los días a las: ' + horas.map(h => `<span class="turno">${h}</span>`).join('')
+        : '<i class="fas fa-exclamation-circle"></i> "Hasta las" debe ser después de la hora de envío.';
+    }
+    ['tipo', 'intervalo', 'horaInicio', 'horaFin'].forEach(n => {
+      el(n).addEventListener('input', mostrar);
+      el(n).addEventListener('change', mostrar);
+    });
+    return {
+      mostrar,
+      // Campos para la API (mismos nombres que SMS).
+      datos() {
+        if (el('tipo').value !== 'recurrente') {
+          return { tipo: 'simple', fecha_programada: el('fecha').value ? `${el('fecha').value}T${el('hora').value || '08:00'}` : null };
+        }
+        const intervalo = el('intervalo').value;
+        return {
+          tipo: 'recurrente', hora_inicio: el('horaInicio').value || null,
+          intervalo_minutos: intervalo ? Number(intervalo) : null,
+          hora_fin: intervalo ? (el('horaFin').value || null) : null,
+          fecha_fin: el('fechaFin').value || null
+        };
+      },
+      // Carga una programación guardada (sin row: valores por defecto).
+      poner(row) {
+        const r = row || {};
+        const fecha = (r.tipo !== 'recurrente' && r.fecha_programada) || '';
+        el('tipo').value = r.tipo === 'recurrente' ? 'recurrente' : 'simple';
+        el('fecha').value = fecha.slice(0, 10);
+        el('hora').value = fecha.slice(11, 16) || '08:00';
+        el('horaInicio').value = (r.hora_inicio || '08:00').slice(0, 5);
+        el('intervalo').value = r.intervalo_minutos ? String(r.intervalo_minutos) : '';
+        el('horaFin').value = r.hora_fin || '18:30';
+        el('fechaFin').value = r.fecha_fin || '';
+        mostrar();
+      }
+    };
+  }
+  const horarioNuevo = crearHorario(document.getElementById('horarioNuevo'));
+  const horarioEdicion = crearHorario(document.getElementById('horarioEdicion'));
+  horarioNuevo.poner(null);
+
+  // "Todos los días 08:00 a 18:30, cada 2 h hasta el ..." o la fecha de la simple.
+  function textoCuando(p) {
+    if (p.tipo === 'recurrente') {
+      return ValoroHorarios.texto(p.hora_inicio, p.intervalo_minutos, p.hora_fin) + (p.fecha_fin ? ` hasta el ${p.fecha_fin}` : '');
+    }
+    return (p.fecha_programada || '').replace('T', ' ').slice(0, 16);
+  }
+
   function getPayload() {
     return {
       query: queryEl.value.trim(),
@@ -520,8 +654,7 @@
       usuario: usuarioEl.value.trim(),
       reply_email: replyEmailEl.value.trim(),
       confirmar_reenvio: confirmarReenvioEl.checked,
-      fecha_programada: fechaProgramadaEl.value || null,
-      tipo: document.getElementById('tipoProgramacion').value,
+      ...horarioNuevo.datos(),
       plantilla_id: plantillaSelEl.value || null
     };
   }
@@ -533,7 +666,13 @@
     if (!p.query) faltan.push('consulta SQL');
     if (conAsunto && !p.asunto) faltan.push('asunto');
     if (!p.plantilla) faltan.push('mensaje (contenido HTML)');
-    if (conFecha && !p.fecha_programada) faltan.push('fecha y hora de envío');
+    // Mismos nombres que devuelve el servidor (y que SMS).
+    if (conFecha && p.tipo === 'recurrente') {
+      if (!p.hora_inicio) faltan.push('hora de envío');
+      if (p.intervalo_minutos && !p.hora_fin) faltan.push('hasta qué hora (Hasta las)');
+    } else if (conFecha && !p.fecha_programada) {
+      faltan.push('fecha y hora de envío');
+    }
     if (faltan.length) showToast('⚠️ Faltan datos obligatorios: ' + escapeHtml(faltan.join(', ')), 'warning');
     return faltan.length > 0;
   }
@@ -639,6 +778,7 @@
         plantillaSelEl.appendChild(grupo);
       });
       plantillaSelEl.value = actual && plantillasGuardadas.some(p => String(p.id) === String(actual)) ? actual : '';
+      pintarCarrusel();
     } catch (err) {
       showToast(`❌ ${escapeHtml(err.message)}`, 'danger');
     }
@@ -674,6 +814,88 @@
   });
 
   // ========== VISTA PREVIA ==========
+  // Pinta un correo en un marco (.em-marco > iframe) a su ancho real (mínimo 600 px)
+  // y lo escala al ancho del marco, con el alto del contenido: se ve completo.
+  // El iframe no ejecuta scripts (sandbox sin allow-scripts); allow-same-origin
+  // solo deja medir el contenido.
+  function pintarCorreo(marco, html) {
+    const iframe = marco.querySelector('iframe');
+    iframe.onload = () => {
+      const doc = iframe.contentDocument;
+      if (!doc || !doc.documentElement) return;
+      iframe.style.transform = 'none';
+      iframe.style.width = '600px';
+      const ancho = Math.max(600, doc.documentElement.scrollWidth, doc.body ? doc.body.scrollWidth : 0);
+      iframe.style.width = ancho + 'px';
+      const alto = Math.max(200, doc.documentElement.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
+      const escala = Math.min(1, (marco.clientWidth || ancho) / ancho);
+      iframe.style.height = alto + 'px';
+      iframe.style.transform = `scale(${escala})`;
+      // El iframe escalado sigue ocupando su alto real: el contenedor interno lo recorta.
+      iframe.style.marginBottom = `${-(alto * (1 - escala))}px`;
+      iframe.style.marginRight = `${-(ancho * (1 - escala))}px`;
+    };
+    iframe.srcdoc = html || '';
+  }
+
+  // Ver en grande (vista previa del cliente o plantilla del carrusel).
+  const ampliarModal = document.getElementById('ampliarModal');
+  function ampliar(titulo, html) {
+    document.getElementById('ampliarTitulo').textContent = titulo;
+    ampliarModal.classList.add('active');
+    pintarCorreo(document.getElementById('ampliarMarco'), html);
+  }
+  document.getElementById('ampliarCerrar').addEventListener('click', () => ampliarModal.classList.remove('active'));
+  ampliarModal.addEventListener('click', e => { if (e.target === ampliarModal) ampliarModal.classList.remove('active'); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') ampliarModal.classList.remove('active'); });
+  document.getElementById('previewAmpliar').addEventListener('click', () => {
+    const item = vistaPrevia[vistaIndice];
+    if (item) ampliar(`Para: ${item.email || '(sin email)'} · ${item.asunto || '(Sin asunto)'}`, item.contenido || '');
+  });
+
+  // ========== CARRUSEL DE PLANTILLAS ==========
+  // Todas las plantillas de email activas, una a la vez (‹ ›), filtrables por momento.
+  let plIndice = 0;
+  function plantillasFiltradas() {
+    const momento = document.getElementById('plMomento').value;
+    return plantillasGuardadas.filter(p => !momento || (p.momento || 'Sin momento') === momento);
+  }
+  function pintarCarrusel() {
+    const lista = plantillasFiltradas();
+    const momentos = [...new Set(plantillasGuardadas.map(p => p.momento || 'Sin momento'))].sort();
+    const sel = document.getElementById('plMomento'), actual = sel.value;
+    sel.innerHTML = '<option value="">Todos los momentos</option>' +
+      momentos.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+    sel.value = momentos.includes(actual) ? actual : '';
+    if (plIndice >= lista.length) plIndice = 0;
+    const p = lista[plIndice];
+    document.getElementById('plCount').textContent = lista.length ? `${plIndice + 1} de ${lista.length}` : '0';
+    document.getElementById('plPrev').disabled = plIndice === 0;
+    document.getElementById('plNext').disabled = plIndice >= lista.length - 1;
+    document.getElementById('plUsar').disabled = !p;
+    document.getElementById('plAmpliar').disabled = !p;
+    document.getElementById('plNombre').textContent = p ? p.nombre : 'No hay plantillas guardadas';
+    document.getElementById('plMomentoTxt').textContent = p ? (p.momento || 'Sin momento') : '—';
+    document.getElementById('plUsos').textContent = p ? (p.usos ? `usada ${p.usos} ${p.usos === 1 ? 'vez' : 'veces'}` : 'sin usar') : '';
+    document.getElementById('plAsunto').textContent = p ? (p.asunto || '(Sin asunto)') : '—';
+    pintarCorreo(document.getElementById('plMarco'), p ? p.html : '');
+  }
+  document.getElementById('plPrev').addEventListener('click', () => { if (plIndice > 0) { plIndice--; pintarCarrusel(); } });
+  document.getElementById('plNext').addEventListener('click', () => { if (plIndice < plantillasFiltradas().length - 1) { plIndice++; pintarCarrusel(); } });
+  document.getElementById('plMomento').addEventListener('change', () => { plIndice = 0; pintarCarrusel(); });
+  document.getElementById('plAmpliar').addEventListener('click', () => {
+    const p = plantillasFiltradas()[plIndice];
+    if (p) ampliar(`${p.nombre} · ${p.asunto || '(Sin asunto)'}`, p.html);
+  });
+  // Usar: la selecciona arriba (como elegirla en la lista) y carga asunto y HTML.
+  document.getElementById('plUsar').addEventListener('click', () => {
+    const p = plantillasFiltradas()[plIndice];
+    if (!p) return;
+    plantillaSelEl.value = String(p.id);
+    plantillaSelEl.dispatchEvent(new Event('change'));
+    plantillaSelEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
   function mostrarVistaPrevia(items) {
     vistaPrevia = items; vistaIndice = 0;
     if (!items.length) { previewBox.style.display = 'none'; return; }
@@ -695,8 +917,8 @@
     } else {
       aviso.style.display = 'none';
     }
-    // sandbox sin permisos: el HTML se ve tal cual, sin ejecutar scripts ni tocar la página.
-    previewContent.srcdoc = item.contenido || '';
+    // sandbox sin scripts: el HTML se ve tal cual, sin ejecutar nada ni tocar la página.
+    pintarCorreo(document.getElementById('previewMarco'), item.contenido || '');
   }
 
   function vistaPreviaVencida() {
@@ -805,7 +1027,9 @@
       showResult(`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         <div><strong>✅ Enviados:</strong> ${data.enviados || 0}</div>
         <div><strong>❌ Fallidos:</strong> ${data.fallidos || 0}</div>
-        <div style="grid-column:1/-1;"><strong>📦 ID:</strong> <code>${data.campana_id || 'N/A'}</code></div></div>`);
+        <div style="grid-column:1/-1;"><strong>📦 Campaña:</strong> <code>${data.campana_id || 'N/A'}</code>
+          · estado en la plataforma de email: <strong>${escapeHtml(data.estado_campana || '—')}</strong>
+          (${data.destinatarios_campana ?? '—'} destinatarios)</div></div>`);
       showToast(data.enviados ? `✅ ${data.enviados} emails enviados` : '❌ Error', data.enviados ? 'success' : 'danger');
       if (data.enviados) clearResult();
       cargarPlantillas();
@@ -818,17 +1042,22 @@
 
   // ========== PROGRAMAR ==========
   scheduleBtn.addEventListener('click', async () => {
-    const fecha = fechaProgramadaEl.value;
     const payload = getPayload();
     if (faltantes(payload, { conFecha: true })) return;
-    if (new Date(fecha) <= new Date()) { showToast('⚠️ La fecha y hora de envío debe ser futura', 'warning'); return; }
-    
+    if (payload.tipo === 'simple' && new Date(payload.fecha_programada) <= new Date()) {
+      showToast('⚠️ La fecha y hora de envío debe ser futura', 'warning'); return;
+    }
+    if (payload.tipo === 'recurrente' && !ValoroHorarios.horasDelDia(payload.hora_inicio, payload.intervalo_minutos, payload.hora_fin).length) {
+      showToast('⚠️ "Hasta las" debe ser después de la hora de envío', 'warning'); return;
+    }
+
     try {
       setLoading(scheduleBtn, true);
       const data = await callAPI('/api/email/programar', payload);
-      showToast(`✅ Programado (ID: ${data.id})`, 'success', 5000);
-      showResult(`<div class="alert alert-success mb-0"><i class="fas fa-check-circle"></i> <strong>Programado</strong><br>ID: <code>${data.id}</code><br>Fecha: ${new Date(data.fecha_programada).toLocaleString()}${data.tipo === 'recurrente' ? ' (se repite todos los días)' : ''}</div>`);
-      fechaProgramadaEl.value = '';
+      showToast(`✅ ${escapeHtml(data.message || 'Programado')}`, 'success', 6000);
+      showResult(`<div class="alert alert-success mb-0"><i class="fas fa-check-circle"></i> <strong>Programado</strong><br>
+        ID: <code>${escapeHtml(data.id)}</code><br>${data.tipo === 'recurrente' ? 'Recurrente' : 'Simple'}: ${escapeHtml(textoCuando(data.item || payload))}</div>`);
+      horarioNuevo.poner(null);
       cargarPlantillas();
       loadScheduled();
     } catch (e) { 
@@ -842,7 +1071,7 @@
   clearBtn.addEventListener('click', () => {
     queryEl.value = ''; asuntoEl.value = ''; plantillaEl.value = '';
     campanaEl.value = ''; usuarioEl.value = ''; replyEmailEl.value = '';
-    confirmarReenvioEl.checked = false; fechaProgramadaEl.value = '';
+    confirmarReenvioEl.checked = false; horarioNuevo.poner(null);
     plantillaSelEl.value = ''; pintarVariables([]);
     clearResult(); rowCount.textContent = '0 filas';
     updateCharCounter();
@@ -888,7 +1117,7 @@
   // ========== PROGRAMACIONES ==========
   // La fecha programada es hora de Colombia: se muestra tal cual, sin convertirla.
   function colorEstado(estado) {
-    return { pendiente: 'warning', enviando: 'info', enviado: 'success', cancelado: 'secondary' }[estado] || 'danger';
+    return { pendiente: 'warning', enviando: 'info', enviado: 'success', completado: 'success', cancelado: 'secondary' }[estado] || 'danger';
   }
 
   // ========== EDITAR PROGRAMACIÓN ==========
@@ -903,10 +1132,9 @@
     document.getElementById('editProgPlantilla').value = row.plantilla || '';
     document.getElementById('editProgPlantillaSel').innerHTML = '<option value="">— Usar una plantilla guardada (opcional) —</option>' +
       plantillasGuardadas.filter(p => p.activa).map(p => `<option value="${p.id}">${escapeHtml((p.momento || 'Sin momento') + ' · ' + p.nombre)}</option>`).join('');
-    // Hora de Colombia guardada tal cual: 'AAAA-MM-DD HH:MM:SS' → valor del input.
-    document.getElementById('editProgFecha').value = (row.fecha_programada || '').slice(0, 16).replace(' ', 'T');
     document.getElementById('editProgUsuario').value = row.usuario || '';
-    document.getElementById('editProgTipo').value = row.tipo === 'recurrente' ? 'recurrente' : 'simple';
+    // Hora de Colombia guardada tal cual ('AAAA-MM-DD HH:MM:SS').
+    horarioEdicion.poner(row);
     editCard.style.display = 'block';
     editCard.scrollIntoView({ behavior: 'smooth' });
   }
@@ -926,9 +1154,8 @@
       asunto: document.getElementById('editProgAsunto').value.trim(),
       reply_email: document.getElementById('editProgReply').value.trim(),
       plantilla: document.getElementById('editProgPlantilla').value.trim(),
-      fecha_programada: document.getElementById('editProgFecha').value || null,
       usuario: document.getElementById('editProgUsuario').value.trim(),
-      tipo: document.getElementById('editProgTipo').value
+      ...horarioEdicion.datos()
     };
     if (faltantes(payload, { conFecha: true })) return;
     try {
@@ -956,41 +1183,120 @@
       const data = await resp.json();
       if (!resp.ok || data.success === false) throw new Error(data.message || `Error HTTP ${resp.status}`);
       programaciones = data.items || [];
-      if (!programaciones.length) { c.innerHTML = '<div class="text-center text-muted py-4">Sin programaciones</div>'; return; }
-      c.innerHTML = '<table class="table table-sm"><thead><tr><th>ID</th><th>Fecha</th><th>Tipo</th><th>Campaña</th><th>Estado</th><th></th></tr></thead><tbody>' +
-        programaciones.map(row => `<tr>
-          <td><code>${escapeHtml(row.id||'')}</code></td>
-          <td>${row.fecha_programada ? escapeHtml(row.fecha_programada.slice(0, 16)) : '—'}</td>
-          <td>${row.tipo === 'recurrente' ? '<i class="fas fa-redo"></i> Diario' : 'Simple'}</td>
-          <td>${escapeHtml(row.campana||'—')}</td>
-          <td><span class="badge badge-${colorEstado(row.estado)}">${escapeHtml(row.estado||'?')}</span>
-            ${row.ultimo_error ? `<div style="font-size:0.72rem;color:var(--danger);max-width:260px;">${escapeHtml(row.ultimo_error)}</div>` : ''}</td>
-          <td>
-            ${['enviando','enviado'].includes(row.estado) ? '' : `<button class="btn btn-sm btn-outline-primary editar-btn" data-id="${escapeHtml(row.id)}"><i class="fas fa-edit"></i> Editar</button>`}
-            ${row.estado==='pendiente' ? `<button class="btn btn-sm btn-outline-danger cancelar-btn" data-id="${escapeHtml(row.id)}"><i class="fas fa-times"></i> Cancelar</button>` : ''}
-          </td>
-        </tr>`).join('') + '</tbody></table>';
-
-      c.querySelectorAll('.editar-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const row = programaciones.find(p => String(p.id) === btn.dataset.id);
-          if (row) abrirEdicion(row);
-        });
-      });
-      
-      c.querySelectorAll('.cancelar-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          if (!confirm('¿Cancelar programación?')) return;
-          try {
-            await callAPI(`/api/email/cancelar/${btn.dataset.id}`, {});
-            showToast('🗑️ Programación cancelada', 'success', 3000);
-          } catch (e) {
-            showToast(`❌ ${escapeHtml(e.message)}`, 'danger');
-          }
-          loadScheduled();
-        });
-      });
+      pintarProgramaciones();
     } catch(e) { c.innerHTML = `<div class="alert alert-danger">Error al cargar programaciones: ${escapeHtml(e.message)}</div>`; }
+  }
+
+  // Tarjetas: estado a color, cuándo sale, último resultado y acciones. Los chips de
+  // arriba cuentan por estado y filtran la lista.
+  let filtroEstadoProg = '';
+  const ETIQUETA_ESTADO = { pendiente: 'Pendiente', enviando: 'Enviando', enviado: 'Enviado', completado: 'Completado', error: 'Error', cancelado: 'Cancelado' };
+  // Cuándo sale, como en SMS: simple = fecha y hora; recurrente = horario del día y fecha fin.
+  function tarjetaProgramacion(row) {
+    const id = escapeHtml(row.id || '');
+    const fecha = row.fecha_programada ? escapeHtml(row.fecha_programada.slice(0, 16)) : '—';
+    const cuando = row.tipo === 'recurrente'
+      ? `<i class="fas fa-sync-alt"></i><div><div class="principal">${escapeHtml(ValoroHorarios.texto(row.hora_inicio, row.intervalo_minutos, row.hora_fin))}</div>
+           <div class="secundario">${row.fecha_fin ? 'Hasta el ' + escapeHtml(row.fecha_fin) : 'Sin fecha de fin'}</div></div>`
+      : `<i class="far fa-calendar-alt"></i><div><div class="principal">${fecha}</div><div class="secundario">Una sola vez</div></div>`;
+    return `
+      <div class="prog-card est-${escapeHtml(row.estado || '')}">
+        <div class="prog-card-head">
+          <div class="prog-card-titulo">
+            <strong title="${escapeHtml(row.campana || '')}">${escapeHtml(row.campana || 'Sin nombre')}</strong>
+            <small>${escapeHtml(row.usuario || 'Sin responsable')} · <code title="${id}">${id.slice(0, 8)}</code></small>
+          </div>
+          <div class="prog-card-badges">
+            ${row.tipo === 'recurrente' ? '<span class="badge badge-info"><i class="fas fa-sync-alt"></i> Diaria</span>' : '<span class="badge badge-primary"><i class="fas fa-clock"></i> Simple</span>'}
+            <span class="badge badge-${colorEstado(row.estado)}">${escapeHtml(ETIQUETA_ESTADO[row.estado] || row.estado || '?')}</span>
+          </div>
+        </div>
+        <div class="prog-cuando">${cuando}</div>
+        ${row.asunto ? `<div class="prog-mensaje" title="${escapeHtml(row.asunto)}"><i class="fas fa-envelope"></i> ${escapeHtml(row.asunto)}</div>` : ''}
+        <div class="prog-datos">
+          <div class="prog-dato"><b>${row.ultimo_enviados ?? '—'}</b>Enviados</div>
+          <div class="prog-dato" style="grid-column: span 2;"><b>${row.fecha_ejecucion ? escapeHtml(row.fecha_ejecucion.slice(0, 16)) : '—'}</b>Última ejecución</div>
+        </div>
+        ${row.ultimo_error ? `<div class="prog-error"><i class="fas fa-exclamation-circle"></i> ${escapeHtml(row.ultimo_error)}</div>` : ''}
+        <div class="prog-card-acciones">
+          ${['enviando','enviado'].includes(row.estado) ? '' : `<button class="btn btn-sm btn-outline-primary editar-btn" data-id="${id}"><i class="fas fa-edit"></i> Editar</button>`}
+          ${row.estado==='pendiente' ? `<button class="btn btn-sm btn-outline-warning cancelar-btn" data-id="${id}"><i class="fas fa-ban"></i> Cancelar</button>` : ''}
+          ${['error','cancelado'].includes(row.estado) ? `<button class="btn btn-sm btn-outline-success reintentar-btn" data-id="${id}"><i class="fas fa-redo-alt"></i> Reintentar</button>` : ''}
+          ${row.estado==='enviando' ? '' : `<button class="btn btn-sm btn-outline-danger eliminar-btn" data-id="${id}"><i class="fas fa-trash"></i> Eliminar</button>`}
+        </div>
+      </div>`;
+  }
+
+  function pintarProgramaciones() {
+    const c = document.getElementById('scheduledResult');
+    if (!programaciones.length) {
+      c.innerHTML = '<div class="prog-vacio"><i class="fas fa-inbox"></i><p>No hay programaciones. Crea la primera con el formulario de arriba.</p></div>';
+      return;
+    }
+    const conteo = {};
+    programaciones.forEach(p => { conteo[p.estado] = (conteo[p.estado] || 0) + 1; });
+    const chip = (valor, texto, n) =>
+      `<button type="button" class="prog-chip ${filtroEstadoProg === valor ? 'activo' : ''}" data-estado="${valor}">${texto} <span class="num">${n}</span></button>`;
+    const visibles = programaciones.filter(p => !filtroEstadoProg || p.estado === filtroEstadoProg);
+    c.innerHTML =
+      '<div class="prog-resumen">' + chip('', 'Todas', programaciones.length) +
+        Object.keys(ETIQUETA_ESTADO).filter(e => conteo[e]).map(e => chip(e, ETIQUETA_ESTADO[e], conteo[e])).join('') +
+        `<button type="button" class="btn btn-outline-secondary btn-sm" id="progRefrescar" style="margin-left:auto;"><i class="fas fa-sync-alt"></i> Refrescar</button>` +
+      '</div>' +
+      (visibles.length
+        ? `<div class="prog-grid">${visibles.map(tarjetaProgramacion).join('')}</div>`
+        : '<div class="prog-vacio"><i class="fas fa-filter"></i><p>Ninguna programación con ese estado.</p></div>');
+
+    c.querySelectorAll('.prog-chip').forEach(btn => {
+      btn.addEventListener('click', () => { filtroEstadoProg = btn.dataset.estado; pintarProgramaciones(); });
+    });
+    document.getElementById('progRefrescar').addEventListener('click', loadScheduled);
+
+    c.querySelectorAll('.editar-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const row = programaciones.find(p => String(p.id) === btn.dataset.id);
+        if (row) abrirEdicion(row);
+      });
+    });
+    
+    c.querySelectorAll('.cancelar-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('¿Cancelar programación?')) return;
+        try {
+          await callAPI(`/api/email/cancelar/${btn.dataset.id}`, {});
+          showToast('🚫 Programación cancelada', 'success', 3000);
+        } catch (e) {
+          showToast(`❌ ${escapeHtml(e.message)}`, 'danger');
+        }
+        loadScheduled();
+      });
+    });
+
+    c.querySelectorAll('.reintentar-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('¿Reintentar la programación? Queda pendiente y se ejecuta de nuevo.')) return;
+        try {
+          const data = await callAPI(`/api/email/programaciones/${encodeURIComponent(btn.dataset.id)}/reejecutar`, {});
+          showToast(`🔁 ${escapeHtml(data.message || 'Reintento programado')}`, 'success', 4000);
+        } catch (e) {
+          showToast(`❌ ${escapeHtml(e.message)}`, 'danger');
+        }
+        loadScheduled();
+      });
+    });
+
+    c.querySelectorAll('.eliminar-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('¿Eliminar la programación? Se borra y no se puede recuperar.')) return;
+        try {
+          await callAPI(`/api/email/programaciones/${encodeURIComponent(btn.dataset.id)}`, {}, 'DELETE');
+          showToast('🗑️ Programación eliminada', 'success', 3000);
+        } catch (e) {
+          showToast(`❌ ${escapeHtml(e.message)}`, 'danger');
+        }
+        loadScheduled();
+      });
+    });
   }
 
   // Event listeners

@@ -19,7 +19,7 @@ COLOMBIA_TZ = pytz.timezone("America/Bogota")
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from backend import (
-    app, db, scheduler, load_config, CONFIG, logger,
+    app, db, scheduler, load_config, logger,
     log_task, log_gui_action, read_recent_log_lines,
     cleanup_old_log_files, reschedule_console_message_job, DOWNLOAD_FOLDER,
     log_activity, logger_sms, logger_email,
@@ -71,68 +71,137 @@ def _hora_colombia(fecha):
     return fecha.astimezone(COLOMBIA_TZ).strftime("%H:%M")
 
 
-def _programaciones_sms_de_hoy(hoy):
+def _texto_intervalo(minutos):
+    """120 → '2 h', 90 → '1 h 30', 30 → '30 min'."""
+    horas, resto = divmod(int(minutos), 60)
+    if not horas:
+        return f"{resto} min"
+    return f"{horas} h" + (f" {resto:02d}" if resto else "")
+
+
+def _ejecuciones_de_hoy(hoy):
+    """
+    ({(canal, id de la programación): [ejecuciones de hoy como dict]}, desde):
+    desde es cuándo empezó el registro de ejecuciones (antes no hay datos por turno).
+    """
+    from database import EjecucionProgramacion
+    inicio = datetime.combine(hoy, datetime.min.time())
+    por_prog = {}
+    for e in (EjecucionProgramacion.query.filter(EjecucionProgramacion.fecha >= inicio)
+              .order_by(EjecucionProgramacion.fecha).all()):
+        por_prog.setdefault((e.canal, e.programacion_id), []).append(e.a_dict())
+    primera = db.session.query(db.func.min(EjecucionProgramacion.fecha)).scalar()
+    return por_prog, primera or _ahora_colombia()
+
+
+def _con_turnos(fila, horas, ejecuciones, ahora, desde):
+    """Agrega a la fila de Inicio sus turnos de hoy y los mensajes enviados en todos ellos."""
+    from services.sms_horarios import turnos_del_dia
+    fila["turnos"] = turnos_del_dia(horas, ejecuciones, ahora, desde)
+    if ejecuciones:
+        fila["mensajes"] = sum(e.get("enviados") or 0 for e in ejecuciones)
+    return fila
+
+
+def _programaciones_sms_de_hoy(hoy, ejecuciones_hoy, desde_registro):
     """
     Programaciones SMS (SQLite) que ya corrieron hoy, que tocan hoy o que
-    quedaron con error. estado_hoy: corrio / pendiente / error.
+    quedaron con error. estado_hoy: corrio / pendiente / error. turnos: cada
+    turno del día (recurrente cada 2 h → uno por turno) con lo que pasó.
     """
     from database import ProgramacionSms
+    from services.sms_horarios import horas_del_dia
+    ahora = _ahora_colombia()
     filas = []
     for prog in ProgramacionSms.query.filter(ProgramacionSms.estado != "cancelado").all():
         tipo = (prog.tipo_programacion or "simple").lower()
+        ejecuciones = ejecuciones_hoy.get(("sms", str(prog.id)), [])
         # fecha_ejecucion se guarda en UTC; fecha_programada en hora de Colombia.
         ejecucion = prog.fecha_ejecucion and pytz.utc.localize(prog.fecha_ejecucion).astimezone(COLOMBIA_TZ)
         corrio = bool(ejecucion) and ejecucion.date() == hoy
+        horas = []
         if tipo == "recurrente":
             hora = prog.hora_inicio or ""
+            if prog.intervalo_minutos and prog.hora_fin:
+                hora = f"{hora} a {prog.hora_fin}, cada {_texto_intervalo(prog.intervalo_minutos)}"
             toca = prog.estado == "pendiente" and not (prog.fecha_fin and prog.fecha_fin < hoy.isoformat())
+            try:
+                horas = horas_del_dia(prog.hora_inicio or "08:00", prog.intervalo_minutos, prog.hora_fin)
+            except ValueError:
+                pass
         else:
             hora = prog.fecha_programada.strftime("%H:%M") if prog.fecha_programada else ""
             toca = prog.estado == "pendiente" and bool(prog.fecha_programada) and prog.fecha_programada.date() == hoy
+            if prog.fecha_programada and prog.fecha_programada.date() == hoy:
+                horas = [hora]
         if prog.estado in ("error", "fallido"):
             estado_hoy = "error"
-        elif corrio:
+        elif corrio or ejecuciones:
             estado_hoy = "corrio"
         elif toca:
             estado_hoy = "pendiente"
         else:
             continue
-        filas.append({
+        # Turnos de antes de crearla o de cuando no había registro no cuentan como perdidos.
+        creada = prog.fecha_creacion and pytz.utc.localize(prog.fecha_creacion).astimezone(COLOMBIA_TZ).replace(tzinfo=None)
+        desde = max(d for d in (creada, desde_registro) if d)
+        if prog.estado not in ("pendiente", "error", "fallido") and tipo == "recurrente":
+            horas = []  # completada: ya no tiene turnos
+        filas.append(_con_turnos({
             "canal": "sms", "id": prog.id, "campana": prog.campana, "tipo": tipo, "hora": hora,
             "estado_hoy": estado_hoy, "corrio_a_las": ejecucion.strftime("%H:%M") if corrio else "",
             "mensajes": prog.ultimo_enviados if corrio else None, "error": prog.ultimo_error or "",
-        })
+        }, horas, ejecuciones, ahora, desde))
     return filas
 
 
-def _programaciones_email_de_hoy(hoy, enviados_por_campana):
+def _programaciones_email_de_hoy(hoy, ejecuciones_hoy, desde_registro):
     """
-    Programaciones de email (BigQuery) que corrieron hoy, tocan hoy o tienen
-    error. Si corrió se sabe por EmailLog: mensajes de hoy con su campaña.
+    Programaciones de email (SQLite) que corrieron hoy, tocan hoy o tienen
+    error. Fechas en hora de Colombia. estado_hoy: corrio / pendiente / error.
     """
+    from database import ProgramacionEmail
+    from services.sms_horarios import horas_del_dia
+    ahora = _ahora_colombia()
     filas = []
-    for p in bq_client.query(f"""
-        SELECT * FROM `{PROGRAMACION_EMAIL_TABLE}`
-        WHERE estado IN ('pendiente', 'enviando', 'error')
-           OR DATE(fecha_actualizacion, 'America/Bogota') = CURRENT_DATE('America/Bogota')
-    """).result():
-        # fecha_programada es la hora de Colombia guardada como si fuera UTC.
-        fecha = p["fecha_programada"].replace(tzinfo=None) if p["fecha_programada"] else None
-        enviados = enviados_por_campana.get(p["campana"] or "")
-        if p["estado"] == "error":
+    for prog in ProgramacionEmail.query.filter(ProgramacionEmail.estado != "cancelado").all():
+        ejecuciones = ejecuciones_hoy.get(("email", prog.id), [])
+        corrio = bool(prog.fecha_ejecucion) and prog.fecha_ejecucion.date() == hoy
+        recurrente = prog.tipo == "recurrente"
+        if recurrente:
+            toca = prog.estado in ("pendiente", "enviando") and not (prog.fecha_fin and prog.fecha_fin < hoy.isoformat())
+        else:
+            toca = prog.estado in ("pendiente", "enviando") and prog.fecha_programada.date() == hoy
+        if prog.estado == "error":
             estado_hoy = "error"
-        elif enviados or (p["estado"] == "enviado" and fecha and fecha.date() == hoy):
+        elif corrio or ejecuciones:
             estado_hoy = "corrio"
-        elif p["estado"] in ("pendiente", "enviando") and fecha and fecha.date() == hoy:
+        elif toca:
             estado_hoy = "pendiente"
         else:
             continue
-        filas.append({
-            "canal": "email", "id": p["id"], "campana": p["campana"] or "", "tipo": p.get("tipo") or "simple",
-            "hora": fecha.strftime("%H:%M") if fecha else "", "estado_hoy": estado_hoy,
-            "corrio_a_las": enviados["ultimo"] if enviados else "",
-            "mensajes": enviados["mensajes"] if enviados else None, "error": p.get("ultimo_error") or "",
-        })
+        # Recurrente como SMS: una vez al día o cada intervalo hasta hora_fin.
+        horas = []
+        if recurrente:
+            hora = prog.hora_recurrente() or ""
+            if prog.intervalo_minutos and prog.hora_fin:
+                hora = f"{hora} a {prog.hora_fin}, cada {_texto_intervalo(prog.intervalo_minutos)}"
+            if prog.estado in ("pendiente", "enviando", "error"):
+                try:
+                    horas = horas_del_dia(prog.hora_recurrente() or "08:00", prog.intervalo_minutos, prog.hora_fin)
+                except ValueError:
+                    pass
+        else:
+            hora = prog.fecha_programada.strftime("%H:%M")
+            horas = [hora] if prog.fecha_programada.date() == hoy else []
+        # En la recurrente, fecha_programada es desde cuándo corre (creada o editada).
+        desde = max(d for d in (prog.fecha_creacion, desde_registro, prog.fecha_programada if recurrente else None) if d)
+        filas.append(_con_turnos({
+            "canal": "email", "id": prog.id, "campana": prog.campana or "", "tipo": prog.tipo or "simple",
+            "hora": hora, "estado_hoy": estado_hoy,
+            "corrio_a_las": prog.fecha_ejecucion.strftime("%H:%M") if corrio else "",
+            "mensajes": prog.ultimo_enviados if corrio else None, "error": prog.ultimo_error or "",
+        }, horas, ejecuciones, ahora, desde))
     return filas
 
 
@@ -148,8 +217,9 @@ def inicio_resumen():
     avisos = []
     totales = {"sms": None, "email": None}
     campanas = []
-    enviados_email = {}
-    programaciones = _programaciones_sms_de_hoy(hoy)
+    ejecuciones_hoy, desde_registro = _ejecuciones_de_hoy(hoy)
+    programaciones = (_programaciones_sms_de_hoy(hoy, ejecuciones_hoy, desde_registro)
+                      + _programaciones_email_de_hoy(hoy, ejecuciones_hoy, desde_registro))
 
     if _asegurar_bq():
         for canal, tabla in (("sms", SMS_LOG_TABLE), ("email", EMAIL_LOG_TABLE)):
@@ -165,21 +235,82 @@ def inicio_resumen():
                 continue
             totales[canal] = sum(f["mensajes"] for f in filas)
             for f in filas:
-                fila = {"canal": canal, "campana": f["campana"] or "", "mensajes": f["mensajes"],
-                        "ultimo": _hora_colombia(f["ultimo"])}
-                campanas.append(fila)
-                if canal == "email":
-                    enviados_email[fila["campana"]] = fila
-        try:
-            programaciones += _programaciones_email_de_hoy(hoy, enviados_email)
-        except Exception as exc:
-            avisos.append(f"Programaciones de email: {mensaje_error_bigquery(exc)}")
+                campanas.append({"canal": canal, "campana": f["campana"] or "", "mensajes": f["mensajes"],
+                                 "ultimo": _hora_colombia(f["ultimo"])})
     else:
-        avisos.append("No se pudo conectar a BigQuery: faltan los totales y las programaciones de email.")
+        avisos.append("No se pudo conectar a BigQuery: faltan los totales de hoy.")
 
     return jsonify({"success": True, "fecha": hoy.isoformat(), "totales": totales,
                     "campanas": campanas, "programaciones": programaciones, "avisos": avisos})
 
+
+
+def _saldo_infobip():
+    """(saldo, moneda) de la cuenta de Infobip (GET /account/1/balance)."""
+    import requests
+    infobip = load_config().get("infobip", {})
+    if not infobip.get("api_key") or not infobip.get("base_url"):
+        raise ValueError("faltan infobip.api_key o infobip.base_url en config.json")
+    resp = requests.get(f"{infobip['base_url'].rstrip('/')}/account/1/balance",
+                        headers={"Authorization": f"App {infobip['api_key']}", "Accept": "application/json"},
+                        timeout=20)
+    resp.raise_for_status()
+    datos = resp.json()
+    return float(datos.get("balance") or 0), datos.get("currency") or "COP"
+
+
+@app.route("/api/inicio/saldo")
+def inicio_saldo():
+    """
+    Saldo de Infobip y lo consumido hoy y en el mes: costo de SMS (SmsInfobip_Valoro,
+    precio × partes, como el dashboard) y emails enviados (EmailLog). La
+    plataforma de email no da el saldo por API: de email solo va lo enviado.
+    Cada parte que falle va en 'avisos' y el resto responde igual.
+    """
+    from bigquery import mensaje_error_bigquery
+    from infobip_sync import COSTO_SQL, TABLA as TABLA_SMS_INFOBIP
+    avisos = []
+    sms = {"saldo": None, "moneda": "COP", "costo_hoy": None, "costo_mes": None,
+           "sms_hoy": None, "sms_mes": None, "alcanza_dias": None}
+    email = {"enviados_hoy": None, "enviados_mes": None}
+    try:
+        sms["saldo"], sms["moneda"] = _saldo_infobip()
+    except Exception as exc:
+        avisos.append(f"Saldo de Infobip: {exc}")
+
+    if _asegurar_bq():
+        try:
+            fila = list(bq_client.query(f"""
+                SELECT
+                  COUNTIF(DATE(sent_at, 'America/Bogota') = CURRENT_DATE('America/Bogota')) AS sms_hoy,
+                  COUNT(*) AS sms_mes,
+                  SUM(IF(DATE(sent_at, 'America/Bogota') = CURRENT_DATE('America/Bogota'), {COSTO_SQL}, 0)) AS costo_hoy,
+                  SUM({COSTO_SQL}) AS costo_mes,
+                  COUNT(DISTINCT DATE(sent_at, 'America/Bogota')) AS dias
+                FROM `{TABLA_SMS_INFOBIP}`
+                WHERE sent_at >= TIMESTAMP(DATE_TRUNC(CURRENT_DATE('America/Bogota'), MONTH), 'America/Bogota')
+            """).result())[0]
+            sms.update({"sms_hoy": fila["sms_hoy"], "sms_mes": fila["sms_mes"],
+                        "costo_hoy": round(fila["costo_hoy"] or 0), "costo_mes": round(fila["costo_mes"] or 0)})
+            # Días que alcanza el saldo al consumo promedio por día del mes.
+            if sms["saldo"] is not None and fila["dias"] and fila["costo_mes"]:
+                sms["alcanza_dias"] = int(sms["saldo"] / (fila["costo_mes"] / fila["dias"]))
+        except Exception as exc:
+            avisos.append(f"Consumo de SMS: {mensaje_error_bigquery(exc)}")
+        try:
+            fila = list(bq_client.query(f"""
+                SELECT
+                  COUNTIF(DATE(fecha_envio, 'America/Bogota') = CURRENT_DATE('America/Bogota')) AS hoy,
+                  COUNT(*) AS mes
+                FROM `{EMAIL_LOG_TABLE}`
+                WHERE fecha_envio >= TIMESTAMP(DATE_TRUNC(CURRENT_DATE('America/Bogota'), MONTH), 'America/Bogota')
+            """).result())[0]
+            email.update({"enviados_hoy": fila["hoy"], "enviados_mes": fila["mes"]})
+        except Exception as exc:
+            avisos.append(f"Emails enviados: {mensaje_error_bigquery(exc)}")
+    else:
+        avisos.append("No se pudo conectar a BigQuery: falta lo consumido.")
+    return jsonify({"success": True, "sms": sms, "email": email, "avisos": avisos})
 
 
 # ==================== CONFIGURACIÓN GENERAL ====================
@@ -242,7 +373,7 @@ def _sms_filas_de_peticion(data):
     programación). El link de WhatsApp de pantalla (cambia cada día) va en
     las filas con Id Mensaje WS que no traen Link.
     """
-    from services.sms_excel import aplicar_link_whatsapp
+    from services.sms_excel import aplicar_link_whatsapp, aplicar_link_mensaje
 
     link_whatsapp = (data.get("link_whatsapp") or "").strip()
     id_mensaje = (data.get("id_mensaje") or "").strip()
@@ -261,12 +392,14 @@ def _sms_filas_de_peticion(data):
                 fila["Nombre Campaña"] = campana
             filas.append(fila)
         aplicar_link_whatsapp(filas, link_whatsapp, id_mensaje)
+        aplicar_link_mensaje(filas, data.get("link"))
         return filas, f"Excel: {cache['archivo']}", None
 
     query = (data.get("query") or "").strip()
     rows, error_response = _get_sms_rows(query)
     if rows:
         aplicar_link_whatsapp(rows, link_whatsapp, id_mensaje)
+        aplicar_link_mensaje(rows, data.get("link"))
     return rows, query, error_response
 
 
@@ -390,7 +523,7 @@ def sms_preview():
         rows, _, error_response = _sms_filas_de_peticion(data)
         if error_response:
             return error_response
-        result = preview_sms(rows, plantilla)
+        result = preview_sms(rows, plantilla, link=(data.get("link") or "").strip())
         if not result.get("success"):
             return jsonify(result), 400
         return jsonify({"success": True, **result})
@@ -418,11 +551,14 @@ def sms_send():
         rows, origen, error_response = _sms_filas_de_peticion(data)
         if error_response:
             return error_response
-        infobip_config = (CONFIG or load_config()).get("infobip", {})
+        infobip_config = load_config().get("infobip", {})
         result = enviar_sms_desde_filas(
             rows, plantilla, infobip_config,
             client=bq_client, campaign=campaign, usuario=usuario,
-            query_sql=origen, allow_resend=allow_resend
+            query_sql=origen, allow_resend=allow_resend,
+            id_mensaje=(data.get("id_mensaje") or "").strip(),
+            id_campana=(data.get("id_campana") or "").strip(),
+            link=(data.get("link") or "").strip(),
         )
         registrar_resumen_sms(campaign, usuario, origen, plantilla,
                              result["total_preparados"], result["enviados"],
@@ -452,21 +588,21 @@ def sms_validar():
         rows, _, error_response = _sms_filas_de_peticion(data)
         if error_response:
             return error_response
-        preview = preview_sms(rows, plantilla)
+        link = (data.get("link") or "").strip()
+        preview = preview_sms(rows, plantilla, link=link)
         if not preview.get("success"):
             return jsonify(preview), 400
 
-        from services.sms_service import preparar_sms, verificar_lista_negra, verificar_duplicados
-        prepared, details = preparar_sms(rows, plantilla)
+        from services.sms_service import preparar_sms, verificar_lista_negra, verificar_duplicados, filtrar_permitidos
+        prepared, details = preparar_sms(rows, plantilla, link)
         if not _asegurar_bq():
             return jsonify({"success": False, "message": "No se pudo conectar a BigQuery para revisar la lista negra."}), 500
         phones = [item["phone"] for item in prepared]
         blocked = verificar_lista_negra(bq_client, phones)
         duplicates = verificar_duplicados(bq_client, phones)
 
-        allowed = [item for item in prepared if item["phone"] not in blocked]
-        if not allow_resend:
-            allowed = [item for item in allowed if item["phone"] not in duplicates]
+        # Los señuelos nunca se excluyen (ni por lista negra ni por duplicados).
+        allowed, n_bloqueados, n_duplicados = filtrar_permitidos(prepared, blocked, duplicates, allow_resend)
 
         preview_mensajes = [{"telefono": item["phone"], "mensaje": item["text"], "longitud": len(item["text"])} for item in allowed[:3]]
 
@@ -475,16 +611,39 @@ def sms_validar():
             "total_consulta": len(rows),
             "total_validos": details.get("total_validos", 0),
             "invalidos": details.get("invalid_numbers", 0),
-            "duplicados": len(duplicates),
-            "blacklist": len(blocked),
+            "duplicados": n_duplicados,
+            "blacklist": n_bloqueados,
             "excluidos_reglas": details.get("excluidos_reglas", {}),
-            "a_enviar": len(allowed),
+            # Sin clientes no sale nada (ni a los señuelos): 0 a enviar.
+            "a_enviar": len(allowed) if any(not i.get("senuelo") for i in allowed) else 0,
             "preview": preview_mensajes
         })
     except Exception as exc:
         logger_sms.exception("❌ Error validando la base de SMS")
         return jsonify({"success": False, "message": str(exc)}), 500
     
+
+def registrar_ejecucion(canal, prog_id, campana, turno, resultado, *, filas=None, enviados=None,
+                        excluidos=None, mensaje=None):
+    """
+    Guarda una ejecución (turno) de una programación en ejecuciones_programacion:
+    resultado enviado / sin_datos / error. Inicio la muestra por turno. Un error
+    aquí no interrumpe el envío.
+    """
+    from database import EjecucionProgramacion
+    try:
+        if turno is not None and turno.tzinfo is not None:
+            turno = turno.astimezone(COLOMBIA_TZ).replace(tzinfo=None)
+        db.session.add(EjecucionProgramacion(
+            canal=canal, programacion_id=str(prog_id), campana=(campana or "")[:255], turno=turno,
+            fecha=_ahora_colombia(), resultado=resultado, filas_consulta=filas, enviados=enviados,
+            excluidos=excluidos, mensaje=(str(mensaje)[:1000] if mensaje else None),
+        ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception(f"No se pudo registrar la ejecución de la programación {canal} {prog_id}")
+
 
 def registrar_resumen_sms(campaign, usuario, query, plantilla, total, enviados, fallidos, estado):
     """Registra un resumen del envío en el log (no interrumpe el flujo)."""
@@ -527,34 +686,12 @@ def execute_sms_schedule(schedule_id: str):
         tipo = (prog.tipo_programacion or 'simple').lower()
         ahora = _sms_now()
         hoy = ahora.date()
+        # Hora que le toca (para el registro de ejecuciones): la programada, o el turno de la recurrente.
+        turno = prog.fecha_programada
 
         # ---------- VALIDACIONES SOLO PARA RECURRENTE ----------
         if tipo == 'recurrente':
-            hora_str = (prog.hora_inicio or '08:00').strip()
-            try:
-                hh, mm = map(int, hora_str.split(':'))
-            except Exception:
-                hh, mm = 8, 0
-
-            # 1) ¿Ya se ejecutó hoy?
-            if prog.fecha_ejecucion:
-                fe = prog.fecha_ejecucion
-                if fe.tzinfo is None:
-                    fe = pytz.utc.localize(fe).astimezone(COLOMBIA_TZ)
-                if fe.date() == hoy:
-                    logger_sms.info(f"✅ Recurrente SMS #{prog.id}: ya se ejecutó hoy")
-                    return
-
-            # 2) ¿Ya llegó la hora?
-            objetivo = COLOMBIA_TZ.localize(
-                datetime.combine(hoy, datetime.min.time())
-            ).replace(hour=hh, minute=mm, second=0, microsecond=0)
-
-            if ahora < objetivo:
-                logger_sms.info(f"⏰ Recurrente SMS #{prog.id}: aún no es la hora")
-                return
-
-            # 3) ¿Ya pasó fecha_fin?
+            # 1) ¿Ya pasó fecha_fin?
             if prog.fecha_fin:
                 try:
                     ffin = datetime.strptime(prog.fecha_fin, "%Y-%m-%d").date()
@@ -568,15 +705,35 @@ def execute_sms_schedule(schedule_id: str):
                 except Exception:
                     pass
 
+            # 2) ¿Toca un turno? Una vez al día a hora_inicio, o cada
+            #    intervalo_minutos hasta hora_fin (services/sms_horarios.py).
+            from services.sms_horarios import turno_a_enviar
+            ultima = prog.fecha_ejecucion
+            if ultima is not None and ultima.tzinfo is None:
+                ultima = pytz.utc.localize(ultima).astimezone(COLOMBIA_TZ)
+            try:
+                turno = turno_a_enviar(ahora, ultima, prog.hora_inicio or '08:00',
+                                       prog.intervalo_minutos, prog.hora_fin)
+            except ValueError:
+                logger_sms.warning(f"⚠️ Recurrente SMS #{prog.id}: horario inválido ({prog.hora_inicio})")
+                return
+            if turno is None:
+                return
+            logger_sms.info(f"⏰ Recurrente SMS #{prog.id}: turno de las {turno:%H:%M}")
+
         # ---------- EJECUTAR ----------
+        filas = None
         try:
             logger_sms.info(f"📤 Ejecutando SMS {tipo.upper()} #{prog.id} - {prog.campana}")
 
-            config = (CONFIG or load_config())
+            config = load_config()
             infobip_config = config.get("infobip", {})
 
             if prog.filas_excel:
                 filas = json.loads(prog.filas_excel)
+                if prog.link:
+                    from services.sms_excel import aplicar_link_mensaje
+                    aplicar_link_mensaje(filas, prog.link)
             else:
                 if not _asegurar_bq():
                     raise SmsServiceError("No se pudo conectar a BigQuery.")
@@ -587,6 +744,9 @@ def execute_sms_schedule(schedule_id: str):
                 if prog.link_whatsapp:
                     from services.sms_excel import aplicar_link_whatsapp
                     aplicar_link_whatsapp(filas, prog.link_whatsapp)
+                if prog.link:
+                    from services.sms_excel import aplicar_link_mensaje
+                    aplicar_link_mensaje(filas, prog.link)
 
             resultado = enviar_sms_desde_filas(
                 filas,
@@ -597,6 +757,9 @@ def execute_sms_schedule(schedule_id: str):
                 usuario=prog.usuario or "sistema",
                 query_sql=prog.consulta_sql,
                 allow_resend=bool(prog.confirmar_reenvio),
+                id_mensaje=prog.id_mensaje or "",
+                id_campana=prog.id_campana or "",
+                link=prog.link or "",
             )
 
             if tipo == 'simple':
@@ -610,6 +773,15 @@ def execute_sms_schedule(schedule_id: str):
             db.session.commit()
 
             logger_sms.info(f"✅ SMS {tipo.capitalize()} enviado: #{prog.id}")
+            detalles = resultado.get("details") or {}
+            excluidos = (detalles.get("excluidos_lista_negra") or 0) + (detalles.get("duplicados_hoy") or 0)
+            if resultado.get("sin_destinatarios"):
+                registrar_ejecucion("sms", prog.id, prog.campana, turno, "sin_datos", filas=len(filas),
+                                    enviados=0, excluidos=excluidos, mensaje=resultado.get("mensaje"))
+            else:
+                registrar_ejecucion("sms", prog.id, prog.campana, turno, "enviado", filas=len(filas),
+                                    enviados=resultado.get("enviados", 0), excluidos=excluidos,
+                                    mensaje=f"{resultado.get('fallidos', 0)} fallidos" if resultado.get("fallidos") else None)
             registro = resultado.get("registro_smslog") or {}
             if registro.get("errores"):
                 log_activity(f"⚠️ SMS programado #{prog.id}: solo {registro.get('guardados', 0)} de "
@@ -629,6 +801,8 @@ def execute_sms_schedule(schedule_id: str):
                 _sms_desagendar(prog)
             except Exception:
                 logger_sms.exception(f"No se pudo guardar el error de la programación SMS #{prog.id}")
+            registrar_ejecucion("sms", prog.id, prog.campana, turno, "error",
+                                filas=len(filas) if filas is not None else None, mensaje=exc)
 
 
 
@@ -670,19 +844,19 @@ def agendar_programacion_sms(prog):
         )
         logger_sms.info(f"🗓️ SMS simple #{prog.id} agendado para {run_date}")
 
-    # ---------- RECURRENTE: IntervalTrigger cada 10 min ----------
+    # ---------- RECURRENTE: revisa cada 10 min (cada minuto si se repite en el día) ----------
     elif tipo == 'recurrente':
-        
+        revisar_cada = 1 if prog.intervalo_minutos else 10
         scheduler.add_job(
             execute_sms_schedule,
-            trigger=IntervalTrigger(minutes=10),
+            trigger=IntervalTrigger(minutes=revisar_cada),
             args=[str(prog.id)],
             id=job_id,
             replace_existing=True,
             max_instances=1,
             coalesce=True,
         )
-        logger_sms.info(f"🔄 SMS recurrente #{prog.id} agendado cada 10 min")
+        logger_sms.info(f"🔄 SMS recurrente #{prog.id} agendado (revisa cada {revisar_cada} min)")
 
 
 def _sms_desagendar(prog):
@@ -718,6 +892,28 @@ def cargar_programaciones_sms_al_iniciar():
 
 
 # ==================== API SMS - PROGRAMAR ====================
+
+def _leer_repeticion(data, hora_inicio):
+    """
+    (intervalo_minutos, hora_fin, error) de una recurrente. Sin intervalo sale
+    una vez al día; con intervalo se repite hasta hora_fin.
+    """
+    from services.sms_horarios import validar_horario
+    try:
+        intervalo = int(data.get("intervalo_minutos") or 0) or None
+    except (TypeError, ValueError):
+        return None, None, "Intervalo inválido."
+    hora_fin = ((data.get("hora_fin") or "").strip() or None) if intervalo else None
+    return intervalo, hora_fin, validar_horario(hora_inicio, intervalo, hora_fin)
+
+
+def _texto_horario(hora_inicio, intervalo, hora_fin):
+    """'todos los días a las 08:00' o 'todos los días a las 08:00, 10:00, ...'."""
+    from services.sms_horarios import horas_del_dia
+    if not intervalo:
+        return f"todos los días a las {hora_inicio}"
+    return f"todos los días a las {', '.join(horas_del_dia(hora_inicio, intervalo, hora_fin))}"
+
 
 @app.route("/api/sms/programar", methods=["POST"])
 def sms_programar_simple():
@@ -759,11 +955,10 @@ def sms_programar_simple():
         # como "Excel: <archivo>" para verla en el listado).
         filas_excel = json.dumps(rows, ensure_ascii=False) if data.get("excel_id") else None
 
+        # Sin destinatarios hoy no es error: al ejecutar se vuelve a leer la base.
         mensajes_validos, _ = aplicar_validaciones(
-            rows, plantilla, bq_client, allow_resend=allow_resend
+            rows, plantilla, bq_client, allow_resend=allow_resend, link=(data.get("link") or "").strip()
         )
-        if not mensajes_validos:
-            raise SmsServiceError("La programación no tiene destinatarios válidos.")
 
         schedule_id = guardar_programacion(
             query=origen,
@@ -778,6 +973,9 @@ def sms_programar_simple():
             filas_excel=filas_excel,
             # Con Excel el link ya va en las filas; con consulta se aplica al ejecutar.
             link_whatsapp=None if filas_excel else ((data.get("link_whatsapp") or "").strip() or None),
+            id_mensaje=(data.get("id_mensaje") or "").strip(),
+            id_campana=(data.get("id_campana") or "").strip(),
+            link=(data.get("link") or "").strip(),
         )
 
         from database import ProgramacionSms
@@ -825,6 +1023,9 @@ def sms_programar_recurrente():
     allow_resend = bool(data.get("confirmar_reenvio", False))
     hora_inicio = (data.get("hora_inicio") or "").strip()
     fecha_fin = (data.get("fecha_fin") or "").strip() or None
+    intervalo_minutos, hora_fin, error_horario = _leer_repeticion(data, hora_inicio)
+    if error_horario:
+        return jsonify({"success": False, "message": error_horario}), 400
 
     if data.get("excel_id"):
         # La base de un Excel no cambia: repetirla cada día enviaría lo mismo.
@@ -848,12 +1049,14 @@ def sms_programar_recurrente():
         rows, error_response = _get_sms_rows(query)
         if error_response:
             return error_response
+        link = (data.get("link") or "").strip()
+        from services.sms_excel import aplicar_link_mensaje
+        aplicar_link_mensaje(rows, link)
 
+        # Sin destinatarios hoy no es error: cada turno vuelve a leer la base.
         mensajes_validos, _ = aplicar_validaciones(
-            rows, plantilla, bq_client, allow_resend=allow_resend
+            rows, plantilla, bq_client, allow_resend=allow_resend, link=link
         )
-        if not mensajes_validos:
-            raise SmsServiceError("La programación no tiene destinatarios válidos.")
 
         schedule_id = guardar_programacion(
             query=query,
@@ -865,6 +1068,11 @@ def sms_programar_recurrente():
             tipo_programacion="recurrente",
             hora_inicio=hora_inicio,
             fecha_fin=fecha_fin,
+            id_mensaje=(data.get("id_mensaje") or "").strip(),
+            id_campana=(data.get("id_campana") or "").strip(),
+            intervalo_minutos=intervalo_minutos,
+            hora_fin=hora_fin,
+            link=link,
         )
 
         from database import ProgramacionSms
@@ -880,7 +1088,9 @@ def sms_programar_recurrente():
             "hora_inicio": hora_inicio,
             "fecha_fin": fecha_fin,
             "total_destinatarios": len(mensajes_validos),
-            "message": f"SMS recurrente programado para las {hora_inicio}.",
+            "intervalo_minutos": intervalo_minutos,
+            "hora_fin": hora_fin,
+            "message": f"SMS recurrente programado {_texto_horario(hora_inicio, intervalo_minutos, hora_fin)}.",
         })
 
     except (ValueError, SmsServiceError) as exc:
@@ -929,18 +1139,34 @@ def config_mensajes():
     return render_template("config_mensajes.html", momentos=_momentos())
 
 
+ETAPAS_SMS = (1, 2, 3, 4)
+
+
+def _leer_etapa(valor):
+    """Etapa de la plantilla SMS: 1 a 4, o None si viene vacía. ValueError si no es válida."""
+    if valor in (None, ""):
+        return None
+    etapa = int(valor)
+    if etapa not in ETAPAS_SMS:
+        raise ValueError("La etapa debe ser 1, 2, 3 o 4")
+    return etapa
+
+
 @app.route("/api/sms/mensajes", methods=["GET"])
 def api_mensajes_list():
-    """Plantillas SMS. ?momento=X filtra por momento; ?activos=1 solo las activas (constructor)."""
+    """Plantillas SMS. ?momento=X y ?etapa=N filtran; ?activos=1 solo las activas (constructor)."""
     try:
         from database import MensajeOperacion
         query = MensajeOperacion.query
         momento = (request.args.get("momento") or "").strip()
         if momento:
             query = query.filter(MensajeOperacion.Momento == momento)
+        etapa = (request.args.get("etapa") or "").strip()
+        if etapa:
+            query = query.filter(MensajeOperacion.Etapa == int(etapa))
         if request.args.get("activos") == "1":
             query = query.filter(MensajeOperacion.Estado == 1)
-        mensajes = query.order_by(MensajeOperacion.Momento, MensajeOperacion.id.desc()).all()
+        mensajes = query.order_by(MensajeOperacion.Momento, MensajeOperacion.Etapa, MensajeOperacion.id.desc()).all()
         return jsonify({"success": True, "items": [m.to_dict() for m in mensajes]})
     except Exception as exc:
         return jsonify({"success": False, "message": str(exc)}), 500
@@ -956,7 +1182,14 @@ def api_mensajes_create():
         estado = int(data.get("estado", 1))
         if not momento or not mensaje_texto:
             return jsonify({"success": False, "message": "Momento y mensaje son obligatorios"}), 400
-        nuevo = MensajeOperacion(Momento=momento, Mensaje=mensaje_texto, Estado=estado)
+        try:
+            etapa = _leer_etapa(data.get("etapa"))
+        except ValueError:
+            return jsonify({"success": False, "message": "La etapa debe ser 1, 2, 3 o 4"}), 400
+        nuevo = MensajeOperacion(Momento=momento, Etapa=etapa, Mensaje=mensaje_texto, Estado=estado,
+                                 IdMensaje=(data.get("id_mensaje") or "").strip() or None,
+                                 IdCampana=(data.get("id_campana") or "").strip() or None,
+                                 Link=(data.get("link") or "").strip() or None)
         db.session.add(nuevo)
         db.session.commit()
         return jsonify({"success": True, "message": "Mensaje creado", "item": nuevo.to_dict()})
@@ -973,7 +1206,16 @@ def api_mensajes_update(mensaje_id):
             return jsonify({"success": False, "message": "Mensaje no encontrado"}), 404
         data = request.get_json() or {}
         if "momento" in data: mensaje.Momento = data["momento"].strip()
+        if "etapa" in data:
+            try:
+                mensaje.Etapa = _leer_etapa(data["etapa"])
+            except ValueError:
+                db.session.rollback()
+                return jsonify({"success": False, "message": "La etapa debe ser 1, 2, 3 o 4"}), 400
         if "mensaje" in data: mensaje.Mensaje = data["mensaje"].strip()
+        if "id_mensaje" in data: mensaje.IdMensaje = (data["id_mensaje"] or "").strip() or None
+        if "id_campana" in data: mensaje.IdCampana = (data["id_campana"] or "").strip() or None
+        if "link" in data: mensaje.Link = (data["link"] or "").strip() or None
         if "estado" in data: mensaje.Estado = int(data["estado"])
         if not mensaje.Momento or not mensaje.Mensaje:
             db.session.rollback()
@@ -1031,9 +1273,7 @@ def email_programaciones_pagina():
 
 # ==================== EMAIL - CAMPOS OBLIGATORIOS ====================
 
-# Programaciones de email (en BigQuery; las de SMS están en SQLite).
-PROGRAMACION_EMAIL_TABLE = "capable-arbor-209819.Temporal.ProgramacionEmail_Valoro"
-
+# Las programaciones de email están en SQLite (database.ProgramacionEmail), como las de SMS.
 
 def _faltantes_email(data, *, con_nombre=True, con_asunto=True, con_fecha=False):
     """Nombres de los campos obligatorios que faltan en la petición de email."""
@@ -1046,19 +1286,18 @@ def _faltantes_email(data, *, con_nombre=True, con_asunto=True, con_fecha=False)
         faltan.append("asunto")
     if not (data.get("plantilla") or "").strip():
         faltan.append("mensaje (contenido HTML)")
-    if con_fecha and not (data.get("fecha_programada") or "").strip():
-        faltan.append("fecha y hora de envío")
-    if con_fecha and (data.get("tipo") or "simple") not in ("simple", "recurrente"):
+    tipo = (data.get("tipo") or "simple").strip()
+    if con_fecha and tipo not in ("simple", "recurrente"):
         faltan.append("tipo (simple o recurrente)")
+    elif con_fecha and tipo == "recurrente":
+        # Igual que SMS: hora de envío y, si se repite en el día, hasta qué hora.
+        if not (data.get("hora_inicio") or "").strip():
+            faltan.append("hora de envío")
+        if data.get("intervalo_minutos") and not (data.get("hora_fin") or "").strip():
+            faltan.append("hasta qué hora (Hasta las)")
+    elif con_fecha and not (data.get("fecha_programada") or "").strip():
+        faltan.append("fecha y hora de envío")
     return faltan
-
-
-def _error_columnas_email(exc):
-    """Mensaje claro si la tabla de programaciones de email no existe o le faltan columnas (ver README)."""
-    if any(x in str(exc) for x in ("Unrecognized name", "Not found: Table", "no such field")):
-        return (f"La tabla {PROGRAMACION_EMAIL_TABLE} no existe o le faltan columnas (tipo, ultimo_error): "
-                "créala con el CREATE TABLE del README.")
-    return str(exc)
 
 
 # ==================== EMAIL - PREVIEW ====================
@@ -1103,7 +1342,7 @@ def _variables_sin_campo_email(plantilla, asunto):
     if not plantilla:
         return [], None
     try:
-        email_config = (CONFIG or load_config()).get("email", {})
+        email_config = load_config().get("email", {})
         if not email_config.get("api_key"):
             return [], "No se revisaron los campos de la cuenta de email: falta email.api_key en config.json."
         campos_api = EmailClient(email_config["api_key"]).obtener_campos_personalizados()
@@ -1181,11 +1420,13 @@ def email_send():
         plantilla_guardada = _plantilla_email_del_envio(data)
         resultado = enviar_campana_email(
             bq_client, rows, plantilla, asunto, _campana_con_plantilla(campana_nombre, plantilla_guardada),
-            usuario, reply_email, confirmar_reenvio, (CONFIG or load_config()).get("email", {}),
+            usuario, reply_email, confirmar_reenvio, load_config().get("email", {}),
         )
         _registrar_uso_plantilla_email(plantilla_guardada)
         log_gui_action("Envio Email", campana_id=resultado["campana_id"], enviados=resultado["enviados"])
-        return jsonify({"success": True, **resultado, "message": f"{resultado['enviados']} emails enviados"})
+        return jsonify({"success": True, **resultado, "message":
+                        f"{resultado['enviados']} emails enviados (campaña {resultado['campana_id']}: "
+                        f"{resultado['estado_campana']} en la plataforma de email)"})
     except (EmailServiceError, EmailClientError) as exc:
         logger_email.error(f"❌ Envío de email '{campana_nombre}' rechazado: {exc}")
         return jsonify({"success": False, "message": str(exc)}), 400
@@ -1243,6 +1484,10 @@ def email_history():
 
 @app.route("/api/email/programar", methods=["POST"])
 def email_schedule():
+    """
+    Programa un email, igual que SMS: simple (fecha y hora) o recurrente (todos
+    los días a hora_inicio, o cada intervalo_minutos hasta hora_fin, hasta fecha_fin).
+    """
     data = request.get_json(silent=True) or {}
     query = (data.get("query") or "").strip()
     plantilla = (data.get("plantilla") or "").strip()
@@ -1250,26 +1495,25 @@ def email_schedule():
     campana_nombre = (data.get("campana") or "").strip()
     usuario = (data.get("usuario") or "").strip()
     reply_email = (data.get("reply_email") or "").strip()
-    fecha_programada = (data.get("fecha_programada") or "").strip()
-    tipo = (data.get("tipo") or "simple").strip()
 
     faltan = _faltantes_email(data, con_fecha=True)
     if faltan:
         return _respuesta_faltantes(faltan)
+    horario, error_horario = _leer_horario_email(data)
+    if error_horario:
+        return jsonify({"success": False, "message": error_horario}), 400
 
     try:
-        run_date = datetime.fromisoformat(fecha_programada)
-        if run_date.replace(tzinfo=None) <= datetime.now(COLOMBIA_TZ).replace(tzinfo=None):
-            raise EmailServiceError("La fecha programada debe ser futura.")
-
         rows, error_response = _get_sms_rows(query)
         if error_response:
             return error_response
 
         from services.email_service import validar_variables_plantilla
-        validacion = validar_variables_plantilla(rows, plantilla, asunto)
-        if not validacion["valido"]:
-            return jsonify({"success": False, "message": validacion["error"], "validacion": validacion}), 400
+        # Sin filas hoy no es error en una recurrente: cada turno vuelve a leer la base.
+        if rows or horario["tipo"] == "simple":
+            validacion = validar_variables_plantilla(rows, plantilla, asunto)
+            if not validacion["valido"]:
+                return jsonify({"success": False, "message": validacion["error"], "validacion": validacion}), 400
         sin_campo, _ = _variables_sin_campo_email(plantilla, asunto)
         if sin_campo:
             return jsonify({"success": False, "message":
@@ -1277,204 +1521,255 @@ def email_schedule():
                 f"{', '.join(sin_campo)}. Créalas en la cuenta o quítalas de la plantilla."}), 400
 
         plantilla_guardada = _plantilla_email_del_envio(data)
-        schedule_id = str(uuid4())
-        # Hora de Colombia (sin zona), como el resto de programaciones.
-        if run_date.tzinfo is not None:
-            run_date = run_date.astimezone(COLOMBIA_TZ).replace(tzinfo=None)
-        now = datetime.now(timezone.utc).isoformat()
-
-        from google.cloud import bigquery
-        job_config = bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ScalarQueryParameter("id", "STRING", schedule_id),
-            bigquery.ScalarQueryParameter("fecha_prog", "TIMESTAMP", run_date.isoformat()),
-            bigquery.ScalarQueryParameter("consulta", "STRING", query),
-            bigquery.ScalarQueryParameter("plantilla_param", "STRING", plantilla),
-            bigquery.ScalarQueryParameter("asunto_param", "STRING", asunto),
-            bigquery.ScalarQueryParameter("campana", "STRING", _campana_con_plantilla(campana_nombre, plantilla_guardada) or ""),
-            bigquery.ScalarQueryParameter("usuario", "STRING", usuario or ""),
-            bigquery.ScalarQueryParameter("reply", "STRING", reply_email or ""),
-            bigquery.ScalarQueryParameter("now", "TIMESTAMP", now),
-            bigquery.ScalarQueryParameter("tipo", "STRING", tipo),
-        ])
-
-        insert_sql = f"""
-            INSERT INTO `{PROGRAMACION_EMAIL_TABLE}`
-            (id, fecha_programada, consulta_sql, plantilla, asunto, campana, estado, usuario, reply_email, fecha_creacion, fecha_actualizacion, tipo)
-            VALUES (@id, @fecha_prog, @consulta, @plantilla_param, @asunto_param, @campana, 'pendiente', @usuario, @reply, @now, @now, @tipo)
-        """
-        try:
-            bq_client.query(insert_sql, job_config=job_config).result()
-        except Exception as exc:
-            raise EmailServiceError(_error_columnas_email(exc))
-
-        scheduler.add_job(
-            execute_email_schedule, trigger="date", run_date=run_date,
-            args=[schedule_id], id=f"email_programado_{schedule_id}", replace_existing=True,
-            misfire_grace_time=3600,
+        from database import ProgramacionEmail
+        prog = ProgramacionEmail(
+            id=str(uuid4()), consulta_sql=query, plantilla=plantilla, asunto=asunto,
+            campana=_campana_con_plantilla(campana_nombre, plantilla_guardada) or "",
+            usuario=usuario, reply_email=reply_email, estado="pendiente", **horario,
         )
+        db.session.add(prog)
+        db.session.commit()
+        _email_agendar(prog)
 
         _registrar_uso_plantilla_email(plantilla_guardada)
-        return jsonify({"success": True, "id": schedule_id, "fecha_programada": run_date.isoformat(), "tipo": tipo,
-                        "message": "Envío programado." if tipo == "simple" else "Envío recurrente programado (todos los días a esa hora)."})
+        cuando = _texto_horario_email(prog)
+        log_activity(f"📧 Email programado {prog.id} ({prog.tipo}): {campana_nombre}, {cuando}")
+        return jsonify({"success": True, "id": prog.id, "tipo": prog.tipo, "item": prog.a_dict(),
+                        "message": f"Email programado {cuando}."})
     except (ValueError, EmailServiceError) as exc:
         return jsonify({"success": False, "message": str(exc)}), 400
     except Exception as exc:
+        db.session.rollback()
         logger_email.exception("❌ Error programando el email")
         return jsonify({"success": False, "message": str(exc)}), 500
 
 
+def _ahora_colombia():
+    """Hora de Colombia sin zona (así se guardan las fechas de las programaciones)."""
+    return datetime.now(COLOMBIA_TZ).replace(tzinfo=None)
 
 
-def _email_programacion_estado(client, schedule_id, nuevo, solo_si=None):
+def _leer_horario_email(data):
     """
-    Cambia el estado de una programación de email. Con solo_si, solo si está en
-    ese estado; devuelve cuántas filas cambió (para que una sola app la tome).
+    (campos de horario, error) de una programación de email, igual que SMS.
+    Simple: fecha_programada futura. Recurrente: hora_inicio, repetición en el
+    día (_leer_repeticion) y fecha_fin opcional; fecha_programada = ahora, desde
+    cuándo corre (los turnos de hoy que ya pasaron no salen).
     """
-    from google.cloud import bigquery
-    condicion = " AND estado = @solo_si" if solo_si else ""
-    params = [bigquery.ScalarQueryParameter("id", "STRING", schedule_id),
-              bigquery.ScalarQueryParameter("estado", "STRING", nuevo)]
-    if solo_si:
-        params.append(bigquery.ScalarQueryParameter("solo_si", "STRING", solo_si))
-    job = client.query(f"""
-        UPDATE `{PROGRAMACION_EMAIL_TABLE}`
-        SET estado = @estado, fecha_actualizacion = CURRENT_TIMESTAMP()
-        WHERE id = @id{condicion}
-    """, job_config=bigquery.QueryJobConfig(query_parameters=params))
-    job.result()
-    return job.num_dml_affected_rows or 0
-
-
-def _email_programacion_error(client, schedule_id, mensaje):
-    """
-    Deja la programación en estado 'error' con el mensaje en ultimo_error, para
-    verlo en la lista. Si la tabla aún no tiene la columna ultimo_error (ver
-    README), solo cambia el estado.
-    """
-    from google.cloud import bigquery
+    tipo = (data.get("tipo") or "simple").strip()
+    if tipo == "recurrente":
+        hora_inicio = (data.get("hora_inicio") or "").strip()[:5]
+        if not re.match(r"^\d{2}:\d{2}$", hora_inicio):
+            return None, "Hora de envío inválida. Use HH:MM."
+        intervalo, hora_fin, error = _leer_repeticion(data, hora_inicio)
+        if error:
+            return None, error
+        fecha_fin = (data.get("fecha_fin") or "").strip() or None
+        if fecha_fin:
+            try:
+                datetime.strptime(fecha_fin, "%Y-%m-%d")
+            except ValueError:
+                return None, "Fecha fin inválida (AAAA-MM-DD)."
+            if fecha_fin < _ahora_colombia().date().isoformat():
+                return None, "La fecha fin ya pasó."
+        return {"tipo": "recurrente", "fecha_programada": _ahora_colombia().replace(microsecond=0),
+                "hora_inicio": hora_inicio, "intervalo_minutos": intervalo, "hora_fin": hora_fin,
+                "fecha_fin": fecha_fin}, None
     try:
-        client.query(f"""
-            UPDATE `{PROGRAMACION_EMAIL_TABLE}`
-            SET estado = 'error', ultimo_error = @error, fecha_actualizacion = CURRENT_TIMESTAMP()
-            WHERE id = @id
-        """, job_config=bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ScalarQueryParameter("id", "STRING", schedule_id),
-            bigquery.ScalarQueryParameter("error", "STRING", str(mensaje)[:1000])])).result()
-    except Exception as exc:
-        logger_email.warning(f"⚠️ No se guardó el mensaje de error de la programación {schedule_id} "
-                             f"(¿falta la columna ultimo_error en ProgramacionEmail?): {exc}")
-        _email_programacion_estado(client, schedule_id, "error")
+        run_date = datetime.fromisoformat((data.get("fecha_programada") or "").strip())
+    except ValueError:
+        return None, f"Fecha y hora de envío inválida: {data.get('fecha_programada')}"
+    if run_date.tzinfo is not None:
+        run_date = run_date.astimezone(COLOMBIA_TZ).replace(tzinfo=None)
+    if run_date <= _ahora_colombia():
+        return None, "La fecha y hora de envío debe ser futura."
+    return {"tipo": "simple", "fecha_programada": run_date, "hora_inicio": None,
+            "intervalo_minutos": None, "hora_fin": None, "fecha_fin": None}, None
 
 
-def _email_proxima_fecha(fecha, ahora):
-    """Siguiente día (a la misma hora) posterior a ahora. Ambas en hora de Colombia, sin zona."""
-    fecha = fecha.replace(tzinfo=None)
-    while fecha <= ahora:
-        fecha += timedelta(days=1)
-    return fecha
+def _texto_horario_email(prog):
+    """'para 2026-10-20 08:00' o 'todos los días a las 08:00, 10:00 (hasta el ...)'."""
+    if prog.tipo != "recurrente":
+        return f"para {prog.fecha_programada:%Y-%m-%d %H:%M}"
+    texto = _texto_horario(prog.hora_recurrente(), prog.intervalo_minutos, prog.hora_fin)
+    return texto + (f" hasta el {prog.fecha_fin}" if prog.fecha_fin else "")
 
 
-def _email_reagendar_manana(client, schedule_id, fecha_actual):
-    """Recurrente: tras enviar, queda pendiente para el día siguiente a la misma hora."""
-    from google.cloud import bigquery
-    siguiente = _email_proxima_fecha(fecha_actual, datetime.now(COLOMBIA_TZ).replace(tzinfo=None))
-    client.query(f"""
-        UPDATE `{PROGRAMACION_EMAIL_TABLE}`
-        SET estado = 'pendiente', fecha_programada = @fecha, ultimo_error = NULL,
-            fecha_actualizacion = CURRENT_TIMESTAMP()
-        WHERE id = @id
-    """, job_config=bigquery.QueryJobConfig(query_parameters=[
-        bigquery.ScalarQueryParameter("id", "STRING", schedule_id),
-        bigquery.ScalarQueryParameter("fecha", "TIMESTAMP", siguiente.isoformat())])).result()
+def _email_agendar(prog):
+    """
+    Crea o reemplaza el job de la programación, como SMS: simple = email_programado_<id>
+    a su fecha (DateTrigger); recurrente = email_recurrente_<id>, revisa cada 10 min
+    (cada minuto si se repite en el día) y envía cuando toca un turno.
+    """
+    _email_desagendar(prog.id)
+    if prog.estado != "pendiente":
+        return
+    if prog.tipo == "recurrente":
+        revisar_cada = 1 if prog.intervalo_minutos else 10
+        scheduler.add_job(
+            execute_email_schedule, trigger=IntervalTrigger(minutes=revisar_cada), args=[prog.id],
+            id=f"email_recurrente_{prog.id}", replace_existing=True, max_instances=1, coalesce=True,
+        )
+        return
+    run_date = max(COLOMBIA_TZ.localize(prog.fecha_programada), datetime.now(COLOMBIA_TZ) + timedelta(seconds=5))
     scheduler.add_job(
-        execute_email_schedule, trigger=DateTrigger(run_date=COLOMBIA_TZ.localize(siguiente)),
-        args=[schedule_id], id=f"email_programado_{schedule_id}", replace_existing=True,
-        misfire_grace_time=3600,
+        execute_email_schedule, trigger=DateTrigger(run_date=run_date), args=[prog.id],
+        id=f"email_programado_{prog.id}", replace_existing=True, misfire_grace_time=3600,
     )
 
 
-def execute_email_schedule(schedule_id: str):
-    """Job email_programado_<id>: envía una programación de email con los mismos filtros que el envío inmediato."""
-    from google.cloud import bigquery
-    if not _asegurar_bq():
-        logger_email.error(f"❌ Email programado {schedule_id}: no se pudo conectar a BigQuery")
-        return
-    client = bq_client
-    try:
-        # Reservarla: si otra app ya la tomó (o se canceló), no se envía dos veces.
-        if _email_programacion_estado(client, schedule_id, "enviando", solo_si="pendiente") != 1:
-            logger.info(f"Email programado {schedule_id}: ya no está pendiente, no se envía")
-            return
-        prog = dict(next(iter(client.query(
-            f"SELECT * FROM `{PROGRAMACION_EMAIL_TABLE}` WHERE id = @id",
-            job_config=bigquery.QueryJobConfig(query_parameters=[
-                bigquery.ScalarQueryParameter("id", "STRING", schedule_id)])).result())).items())
-
-        fetched = fetch_sms_query_rows(client, prog["consulta_sql"])
-        if not fetched.get("success"):
-            raise EmailServiceError(fetched.get("message", "Error en la consulta"))
-        resultado = enviar_campana_email(
-            client, fetched["rows"], prog["plantilla"], prog.get("asunto") or "",
-            prog.get("campana") or "", prog.get("usuario") or "sistema", prog.get("reply_email") or "",
-            False, (CONFIG or load_config()).get("email", {}),
-        )
-        if prog.get("tipo") == "recurrente":
-            _email_reagendar_manana(client, schedule_id, prog["fecha_programada"])
-        else:
-            _email_programacion_estado(client, schedule_id, "enviado")
-        log_activity(f"📧 Email programado '{prog.get('campana') or schedule_id}': "
-                     f"{resultado['enviados']} enviados (campaña {resultado['campana_id']}).")
-    except Exception as exc:
-        logger_email.exception(f"❌ Error ejecutando el email programado {schedule_id}: {exc}")
-        log_activity(f"❌ Email programado {schedule_id} falló: {exc}", "ERROR")
+def _email_desagendar(schedule_id):
+    """Quita los jobs de la programación, simple y recurrente (si no existen, no pasa nada)."""
+    for job_id in (f"email_programado_{schedule_id}", f"email_recurrente_{schedule_id}"):
         try:
-            _email_programacion_error(client, schedule_id, exc)
+            scheduler.remove_job(job_id)
         except Exception:
-            logger_email.exception(f"No se pudo marcar con error la programación de email {schedule_id}")
+            pass
+
+
+def _email_programacion_estado(schedule_id, nuevo, solo_si=None):
+    """
+    Cambia el estado de una programación de email. Con solo_si, solo si está en
+    ese estado; devuelve cuántas filas cambió (para no tomarla dos veces).
+    """
+    from database import ProgramacionEmail
+    consulta = ProgramacionEmail.query.filter_by(id=schedule_id)
+    if solo_si:
+        consulta = consulta.filter_by(estado=solo_si)
+    cambiadas = consulta.update({"estado": nuevo, "fecha_actualizacion": _ahora_colombia()},
+                                synchronize_session=False)
+    db.session.commit()
+    return cambiadas
+
+
+def _email_programacion_error(schedule_id, mensaje):
+    """Deja la programación en estado 'error' con el mensaje en ultimo_error y quita su job, como SMS."""
+    from database import ProgramacionEmail
+    ProgramacionEmail.query.filter_by(id=schedule_id).update(
+        {"estado": "error", "ultimo_error": str(mensaje)[:1000], "fecha_actualizacion": _ahora_colombia()},
+        synchronize_session=False)
+    db.session.commit()
+    _email_desagendar(schedule_id)
+
+
+def _email_turno(prog, ahora):
+    """
+    Recurrente: el turno (datetime) que toca enviar ahora, o None (misma regla
+    que SMS, services/sms_horarios.turno_a_enviar). Los turnos de antes de
+    fecha_programada (cuando se creó o editó) no salen.
+    """
+    from services.sms_horarios import turno_a_enviar
+    desde = prog.fecha_programada - timedelta(seconds=1)
+    ultima = max(prog.fecha_ejecucion, desde) if prog.fecha_ejecucion else desde
+    return turno_a_enviar(ahora, ultima, prog.hora_recurrente() or "08:00", prog.intervalo_minutos, prog.hora_fin)
+
+
+def execute_email_schedule(schedule_id: str):
+    """
+    Jobs email_programado_<id> / email_recurrente_<id>: envía una programación de
+    email con los mismos filtros que el envío inmediato. La recurrente solo envía
+    cuando toca un turno y vuelve a quedar pendiente; al pasar fecha_fin queda completada.
+    """
+    from database import ProgramacionEmail
+    from services.email_service import SinDestinatariosEmail
+    with app.app_context():
+        prog = db.session.get(ProgramacionEmail, schedule_id)
+        if not prog or prog.estado != "pendiente":
+            return
+        campana, turno, filas = prog.campana or "", prog.fecha_programada, None
+        recurrente = prog.tipo == "recurrente"
+        if recurrente:
+            ahora = _ahora_colombia()
+            if prog.fecha_fin and ahora.date().isoformat() > prog.fecha_fin:
+                prog.estado = "completado"
+                db.session.commit()
+                _email_desagendar(schedule_id)
+                log_activity(f"🛑 Email recurrente '{campana or schedule_id}': pasó la fecha fin, queda completado.")
+                return
+            try:
+                turno = _email_turno(prog, ahora)
+            except ValueError:
+                logger_email.warning(f"⚠️ Email recurrente {schedule_id}: horario inválido ({prog.hora_inicio})")
+                return
+            if turno is None:
+                return
+            logger_email.info(f"⏰ Email recurrente '{campana}': turno de las {turno:%H:%M}")
+        try:
+            # Reservarla: si ya se tomó (o se canceló/eliminó), no se envía dos veces.
+            if _email_programacion_estado(schedule_id, "enviando", solo_si="pendiente") != 1:
+                logger.info(f"Email programado {schedule_id}: ya no está pendiente, no se envía")
+                return
+            prog = db.session.get(ProgramacionEmail, schedule_id)
+            if not _asegurar_bq():
+                raise EmailServiceError("No se pudo conectar a BigQuery para leer la base de la consulta.")
+            fetched = fetch_sms_query_rows(bq_client, prog.consulta_sql)
+            if not fetched.get("success"):
+                raise EmailServiceError(fetched.get("message", "Error en la consulta"))
+            filas = len(fetched["rows"])
+            try:
+                resultado = enviar_campana_email(
+                    bq_client, fetched["rows"], prog.plantilla, prog.asunto or "",
+                    prog.campana or "", prog.usuario or "sistema", prog.reply_email or "",
+                    False, load_config().get("email", {}),
+                )
+            except SinDestinatariosEmail as exc:
+                # Sin datos no es una falla: queda con 0 enviados y la recurrente sigue.
+                resultado = {"enviados": 0, "sin_datos": str(exc)}
+            prog.ultimo_enviados = resultado["enviados"]
+            prog.fecha_ejecucion = _ahora_colombia()
+            prog.estado = "pendiente" if recurrente else "enviado"
+            prog.ultimo_error = None
+            db.session.commit()
+            if resultado.get("sin_datos"):
+                registrar_ejecucion("email", schedule_id, campana, turno, "sin_datos", filas=filas, enviados=0,
+                                    mensaje=resultado["sin_datos"])
+                log_activity(f"📧 Email programado '{campana or schedule_id}': {resultado['sin_datos']}")
+            else:
+                registrar_ejecucion("email", schedule_id, campana, turno, "enviado", filas=filas,
+                                    enviados=resultado["enviados"],
+                                    excluidos=resultado["blacklist_excluidos"] + resultado["duplicados_excluidos"],
+                                    mensaje=f"Campaña {resultado['campana_id']}: {resultado['estado_campana']}")
+                log_activity(f"📧 Email programado '{campana or schedule_id}': {resultado['enviados']} enviados "
+                             f"(campaña {resultado['campana_id']}, {resultado['estado_campana']}).")
+        except Exception as exc:
+            db.session.rollback()
+            logger_email.exception(f"❌ Error ejecutando el email programado {schedule_id}: {exc}")
+            log_activity(f"❌ Email programado {schedule_id} falló: {exc}", "ERROR")
+            try:
+                _email_programacion_error(schedule_id, exc)
+            except Exception:
+                logger_email.exception(f"No se pudo marcar con error la programación de email {schedule_id}")
+            registrar_ejecucion("email", schedule_id, campana, turno, "error", filas=filas, mensaje=exc)
 
 
 def cargar_programaciones_email_al_iniciar():
     """
     Vuelve a agendar las programaciones de email pendientes (los jobs se pierden
-    al reiniciar). Si ya pasó la hora: menos de 1 hora, se envía en 5 segundos;
-    más de 1 hora, queda fallida. En la copia de prueba no se recargan: la tabla
-    es compartida y la app de producción las enviaría dos veces.
+    al reiniciar). Simple con la hora ya pasada: menos de 1 hora, sale en 5
+    segundos; más de 1 hora, queda con error. Las recurrentes siguen la regla de
+    turnos (como SMS). En la copia de prueba no se recargan.
     """
     from modo_prueba import es_copia_prueba
+    from database import ProgramacionEmail
     if es_copia_prueba():
-        logger_email.warning("🧪 Copia de prueba: no se recargan las programaciones de email (las envía la app de producción).")
+        logger_email.warning("🧪 Copia de prueba: no se recargan las programaciones de email.")
         return
-    if not _asegurar_bq():
-        logger_email.error("❌ No se pudieron recargar las programaciones de email: sin BigQuery")
-        return
-    client = bq_client
-    try:
-        pendientes = list(client.query(
-            f"SELECT * FROM `{PROGRAMACION_EMAIL_TABLE}` WHERE estado = 'pendiente'"
-        ).result())
-        ahora = datetime.now(COLOMBIA_TZ)
-        for fila in pendientes:
-            # Se guardó la hora de Colombia como si fuera UTC: se toma tal cual, como hora de Colombia.
-            fecha = COLOMBIA_TZ.localize(fila["fecha_programada"].replace(tzinfo=None))
-            if fila.get("tipo") == "recurrente" and ahora - fecha > timedelta(hours=1):
-                # Recurrente con la app apagada a su hora: sigue al día siguiente.
-                _email_reagendar_manana(client, fila["id"], fila["fecha_programada"])
-                log_activity(f"⚠️ Email recurrente '{fila['campana'] or fila['id']}' no salió el "
-                             f"{fecha:%Y-%m-%d %H:%M} (app apagada): sigue mañana a la misma hora.", "WARNING")
-                continue
-            if ahora - fecha > timedelta(hours=1):
-                _email_programacion_error(client, fila["id"], "No se envió: pasó más de 1 hora con la app apagada.")
-                log_activity(f"⚠️ Email programado '{fila['campana'] or fila['id']}' para {fecha:%Y-%m-%d %H:%M} "
-                             f"no se envió (pasó más de 1 hora con la app apagada): queda fallido.", "WARNING")
-                continue
-            scheduler.add_job(
-                execute_email_schedule, trigger=DateTrigger(run_date=max(fecha, ahora + timedelta(seconds=5))),
-                args=[fila["id"]], id=f"email_programado_{fila['id']}", replace_existing=True,
-                misfire_grace_time=3600,
-            )
-        logger.info(f"🔁 Programaciones de email pendientes revisadas: {len(pendientes)}")
-    except Exception:
-        logger_email.exception("❌ Error recargando las programaciones de email")
+    with app.app_context():
+        try:
+            pendientes = ProgramacionEmail.query.filter_by(estado="pendiente").all()
+            ahora = _ahora_colombia()
+            for prog in pendientes:
+                if prog.tipo != "recurrente" and ahora - prog.fecha_programada > timedelta(hours=1):
+                    _email_programacion_error(prog.id, "No se envió: pasó más de 1 hora con la app apagada.")
+                    log_activity(f"⚠️ Email programado '{prog.campana or prog.id}' para "
+                                 f"{prog.fecha_programada:%Y-%m-%d %H:%M} no se envió (pasó más de 1 hora "
+                                 f"con la app apagada): queda con error.", "WARNING")
+                    continue
+                _email_agendar(prog)
+            logger.info(f"🔁 Programaciones de email pendientes revisadas: {len(pendientes)}")
+        except Exception:
+            db.session.rollback()
+            logger_email.exception("❌ Error recargando las programaciones de email")
 
 
 # Al arrancar (unos segundos después, para no demorar el inicio de la app).
@@ -1483,48 +1778,37 @@ scheduler.add_job(cargar_programaciones_email_al_iniciar, trigger=DateTrigger(
     replace_existing=True)
 
 
-# ==================== EMAIL - PROGRAMACIONES ====================
+# ==================== EMAIL - PROGRAMACIONES (CRUD en SQLite) ====================
 
 @app.route("/api/email/programaciones", methods=["GET"])
 def email_programaciones():
+    from database import ProgramacionEmail
     try:
-        if not _asegurar_bq():
-            return jsonify({"success": False, "message": "No se pudo conectar a BigQuery"}), 500
-        client = bq_client
-
-        # SELECT *: incluye ultimo_error cuando la tabla ya tiene esa columna.
-        query = f"""
-            SELECT * FROM `{PROGRAMACION_EMAIL_TABLE}`
-            ORDER BY fecha_programada DESC LIMIT 100
-        """
-        result = client.query(query).result()
-        items = []
-        for row in result:
-            item = {}
-            for key, value in row.items():
-                if value is None:
-                    item[key] = None
-                elif hasattr(value, 'strftime'):
-                    item[key] = value.strftime('%Y-%m-%d %H:%M:%S')
-                elif hasattr(value, 'isoformat'):
-                    item[key] = value.isoformat()
-                else:
-                    item[key] = value
-            items.append(item)
-        return jsonify({"success": True, "items": items})
+        progs = ProgramacionEmail.query.order_by(ProgramacionEmail.fecha_programada.desc()).limit(200).all()
+        return jsonify({"success": True, "items": [p.a_dict() for p in progs]})
     except Exception as exc:
         logger_email.exception("❌ Error listando las programaciones de email")
         return jsonify({"success": False, "message": str(exc)}), 500
+
+
+@app.route("/api/email/programaciones/<schedule_id>", methods=["GET"])
+def email_ver_programacion(schedule_id):
+    from database import ProgramacionEmail
+    prog = db.session.get(ProgramacionEmail, schedule_id)
+    if not prog:
+        return jsonify({"success": False, "message": "La programación no existe."}), 404
+    return jsonify({"success": True, "item": prog.a_dict()})
 
 
 @app.route("/api/email/programaciones/<schedule_id>", methods=["PATCH"])
 def email_editar_programacion(schedule_id):
     """
     Edita una programación de email (nombre, consulta, asunto, mensaje, reply-to,
-    responsable, fecha y hora). Solo si no se está enviando ni se envió. Revisa
-    la consulta en BigQuery (dry run), la deja pendiente y reemplaza su job.
+    responsable y horario, igual que SMS). Solo si no se está enviando ni se
+    envió; si estaba cancelada, completada o con error, vuelve a quedar
+    pendiente. Revisa la consulta en BigQuery (dry run) y reemplaza su job.
     """
-    from google.cloud import bigquery
+    from database import ProgramacionEmail
     from consulta_segura import ConsultaNoPermitida, verificar_consulta_lectura
     from bigquery import mensaje_error_bigquery
 
@@ -1532,16 +1816,19 @@ def email_editar_programacion(schedule_id):
     faltan = _faltantes_email(data, con_fecha=True)
     if faltan:
         return _respuesta_faltantes(faltan)
-    try:
-        run_date = datetime.fromisoformat(data["fecha_programada"].strip())
-    except ValueError:
-        return jsonify({"success": False, "message": f"Fecha y hora de envío inválida: {data['fecha_programada']}"}), 400
-    if run_date.tzinfo is not None:
-        run_date = run_date.astimezone(COLOMBIA_TZ).replace(tzinfo=None)
-    if run_date <= datetime.now(COLOMBIA_TZ).replace(tzinfo=None):
-        return jsonify({"success": False, "message": "La fecha y hora de envío debe ser futura."}), 400
+    horario, error_horario = _leer_horario_email(data)
+    if error_horario:
+        return jsonify({"success": False, "message": error_horario}), 400
+
+    prog = db.session.get(ProgramacionEmail, schedule_id)
+    if not prog:
+        return jsonify({"success": False, "message": "La programación no existe."}), 404
+    if prog.estado in ("enviando", "enviado"):
+        return jsonify({"success": False, "message": "Ya se envió (o se está enviando): no se puede editar."}), 409
+
+    # La consulta se sigue leyendo de BigQuery al enviar: se revisa que sea válida.
     if not _asegurar_bq():
-        return jsonify({"success": False, "message": "No se pudo conectar a BigQuery"}), 500
+        return jsonify({"success": False, "message": "No se pudo conectar a BigQuery para revisar la consulta."}), 500
     try:
         verificar_consulta_lectura(bq_client, data["query"])
     except ConsultaNoPermitida as exc:
@@ -1550,58 +1837,93 @@ def email_editar_programacion(schedule_id):
         return jsonify({"success": False, "message": mensaje_error_bigquery(exc)}), 400
 
     try:
-        job = bq_client.query(f"""
-            UPDATE `{PROGRAMACION_EMAIL_TABLE}`
-            SET campana = @campana, consulta_sql = @consulta, asunto = @asunto, plantilla = @plantilla,
-                reply_email = @reply, usuario = @usuario, fecha_programada = @fecha, tipo = @tipo,
-                estado = 'pendiente', ultimo_error = NULL, fecha_actualizacion = CURRENT_TIMESTAMP()
-            WHERE id = @id AND estado NOT IN ('enviando', 'enviado')
-        """, job_config=bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ScalarQueryParameter("id", "STRING", schedule_id),
-            bigquery.ScalarQueryParameter("campana", "STRING", data["campana"].strip()),
-            bigquery.ScalarQueryParameter("consulta", "STRING", data["query"].strip()),
-            bigquery.ScalarQueryParameter("asunto", "STRING", data["asunto"].strip()),
-            bigquery.ScalarQueryParameter("plantilla", "STRING", data["plantilla"].strip()),
-            bigquery.ScalarQueryParameter("reply", "STRING", (data.get("reply_email") or "").strip()),
-            bigquery.ScalarQueryParameter("usuario", "STRING", (data.get("usuario") or "").strip()),
-            # Hora de Colombia (sin zona), como al programar.
-            bigquery.ScalarQueryParameter("fecha", "TIMESTAMP", run_date.isoformat()),
-            bigquery.ScalarQueryParameter("tipo", "STRING", (data.get("tipo") or "simple").strip()),
-        ]))
-        job.result()
-        if not job.num_dml_affected_rows:
-            return jsonify({"success": False, "message": "No existe o ya se envió (o se está enviando): no se puede editar."}), 409
+        prog.campana = data["campana"].strip()
+        prog.consulta_sql = data["query"].strip()
+        prog.asunto = data["asunto"].strip()
+        prog.plantilla = data["plantilla"].strip()
+        prog.reply_email = (data.get("reply_email") or "").strip()
+        prog.usuario = (data.get("usuario") or "").strip()
+        for campo, valor in horario.items():
+            setattr(prog, campo, valor)
+        prog.estado = "pendiente"
+        prog.ultimo_error = None
+        db.session.commit()
     except Exception as exc:
+        db.session.rollback()
         logger_email.exception(f"❌ Error editando la programación de email {schedule_id}")
-        return jsonify({"success": False, "message": _error_columnas_email(exc)}), 500
+        return jsonify({"success": False, "message": str(exc)}), 500
 
-    scheduler.add_job(
-        execute_email_schedule, trigger=DateTrigger(run_date=COLOMBIA_TZ.localize(run_date)),
-        args=[schedule_id], id=f"email_programado_{schedule_id}", replace_existing=True,
-        misfire_grace_time=3600,
-    )
-    log_activity(f"✏️ Email programado {schedule_id} editado: {data['campana'].strip()} para {run_date:%Y-%m-%d %H:%M}")
-    return jsonify({"success": True, "message": "Programación actualizada.", "fecha_programada": run_date.isoformat()})
+    _email_agendar(prog)
+    cuando = _texto_horario_email(prog)
+    log_activity(f"✏️ Email programado {schedule_id} editado: {prog.campana}, {cuando}")
+    return jsonify({"success": True, "message": f"Programación actualizada: {cuando}.", "item": prog.a_dict()})
 
 
 @app.route("/api/email/cancelar/<schedule_id>", methods=["POST"])
+@app.route("/api/email/programaciones/<schedule_id>/cancelar", methods=["POST"])
 def email_cancelar_programacion(schedule_id):
     try:
-        if not _asegurar_bq():
-            return jsonify({"success": False, "message": "No se pudo conectar a BigQuery"}), 500
-        client = bq_client
         # Solo si sigue pendiente: si ya se está enviando o ya salió, no se puede cancelar.
-        if _email_programacion_estado(client, schedule_id, "cancelado", solo_si="pendiente") != 1:
+        if _email_programacion_estado(schedule_id, "cancelado", solo_si="pendiente") != 1:
             return jsonify({"success": False, "message": "Esta programación ya no está pendiente: no se puede cancelar."}), 409
-        try:
-            scheduler.remove_job(f"email_programado_{schedule_id}")
-        except Exception:
-            pass
-        log_activity(f"🗑️ Email programado {schedule_id} cancelado")
+        _email_desagendar(schedule_id)
+        log_activity(f"🚫 Email programado {schedule_id} cancelado")
         return jsonify({"success": True, "message": "Programación cancelada"})
     except Exception as exc:
+        db.session.rollback()
         logger_email.exception(f"❌ Error cancelando la programación de email {schedule_id}")
         return jsonify({"success": False, "message": str(exc)}), 500
+
+
+@app.route("/api/email/programaciones/<schedule_id>", methods=["DELETE"])
+def email_eliminar_programacion(schedule_id):
+    """Borra la programación y su job. No se puede mientras se está enviando."""
+    from database import ProgramacionEmail
+    try:
+        prog = db.session.get(ProgramacionEmail, schedule_id)
+        if not prog:
+            return jsonify({"success": False, "message": "La programación no existe."}), 404
+        if prog.estado == "enviando":
+            return jsonify({"success": False, "message": "Se está enviando ahora: espera a que termine para eliminarla."}), 409
+        campana = prog.campana
+        db.session.delete(prog)
+        db.session.commit()
+        _email_desagendar(schedule_id)
+        log_activity(f"🗑️ Email programado {schedule_id} eliminado ({campana})")
+        return jsonify({"success": True, "message": "Programación eliminada"})
+    except Exception as exc:
+        db.session.rollback()
+        logger_email.exception(f"❌ Error eliminando la programación de email {schedule_id}")
+        return jsonify({"success": False, "message": str(exc)}), 500
+
+
+@app.route("/api/email/programaciones/<schedule_id>/reejecutar", methods=["POST"])
+def email_reejecutar_programacion(schedule_id):
+    """
+    Vuelve a dejar pendiente una programación de email con error o cancelada y
+    la agenda otra vez. Simple: a su fecha si aún no pasó, si no en unos
+    segundos. Recurrente: sigue con sus turnos (si el de ahora no ha salido, sale).
+    """
+    from database import ProgramacionEmail
+    prog = db.session.get(ProgramacionEmail, schedule_id)
+    if not prog:
+        return jsonify({"success": False, "message": "La programación no existe."}), 404
+    if prog.estado not in ("error", "cancelado"):
+        return jsonify({"success": False, "message": "Solo se reintenta una programación con error o cancelada."}), 409
+    try:
+        prog.estado = "pendiente"
+        prog.ultimo_error = None
+        if prog.tipo != "recurrente":
+            prog.fecha_programada = max(prog.fecha_programada, _ahora_colombia() + timedelta(seconds=5))
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        logger_email.exception(f"❌ Error reintentando la programación de email {schedule_id}")
+        return jsonify({"success": False, "message": str(exc)}), 500
+    _email_agendar(prog)
+    cuando = _texto_horario_email(prog)
+    log_activity(f"🔁 Email programado {schedule_id} reintentado ({prog.campana}), {cuando}")
+    return jsonify({"success": True, "message": f"Reintento programado: {cuando}.", "fecha_programada": prog.fecha_programada.isoformat()})
 
 
 # ==================== EMAIL - PLANTILLAS ====================
@@ -1789,6 +2111,224 @@ def sms_programaciones_pagina():
     return render_template("config_sms.html", modo="programar")
 
 
+@app.route("/programaciones")
+def programaciones_pagina():
+    """
+    Historial de programaciones SMS y email en una sola tabla (como la de
+    Programaciones Terminator): ver el mensaje, si se ejecutó, editar,
+    cancelar, reintentar y eliminar. Usa las APIs de cada canal.
+    """
+    return render_template("programaciones.html")
+
+
+# ==================== HISTORIAL DE ENVÍOS ====================
+# Todo lo enviado (SMS y email, manual o programado), un envío por fila. Las
+# consultas están en historial_envios.py.
+
+@app.route("/envios")
+def envios_pagina():
+    """Historial de envíos: qué salió, cuándo, a cuántos, entregados/fallidos, costo y destinatarios."""
+    return render_template("envios.html")
+
+
+def _rango_envios():
+    """(desde, hasta) en UTC de ?desde=&hasta= (días de Colombia, por defecto los últimos 7). ValueError si no sirven."""
+    hoy = datetime.now(COLOMBIA_TZ).date()
+    desde = datetime.strptime(request.args.get("desde") or (hoy - timedelta(days=6)).isoformat(), "%Y-%m-%d")
+    hasta = datetime.strptime(request.args.get("hasta") or hoy.isoformat(), "%Y-%m-%d")
+    if hasta < desde:
+        raise ValueError("La fecha 'hasta' es anterior a 'desde'.")
+    if (hasta - desde).days > 92:
+        raise ValueError("El rango máximo es de 93 días.")
+    return (COLOMBIA_TZ.localize(desde).astimezone(timezone.utc),
+            COLOMBIA_TZ.localize(hasta + timedelta(days=1)).astimezone(timezone.utc))
+
+
+def _a_colombia(fecha):
+    """Timestamp de BigQuery (UTC) → 'AAAA-MM-DD HH:MM:SS' en hora de Colombia."""
+    return fecha.astimezone(COLOMBIA_TZ).strftime("%Y-%m-%d %H:%M:%S") if fecha else ""
+
+
+def _programaciones_para_origen():
+    """[(canal, id, campaña en minúsculas, fecha o None, ['HH:MM', ...])] para saber qué envío salió de una programación."""
+    from database import ProgramacionEmail, ProgramacionSms
+    from services.sms_horarios import horas_del_dia
+    progs = []
+    for p in ProgramacionSms.query.all():
+        if (p.tipo_programacion or "simple").lower() == "recurrente":
+            try:
+                horas = horas_del_dia(p.hora_inicio or "08:00", p.intervalo_minutos, p.hora_fin)
+            except ValueError:
+                horas = []
+            progs.append(("sms", p.id, (p.campana or "").strip().lower(), None, horas))
+        elif p.fecha_programada:
+            progs.append(("sms", p.id, (p.campana or "").strip().lower(), p.fecha_programada.date(),
+                          [p.fecha_programada.strftime("%H:%M")]))
+    for p in ProgramacionEmail.query.all():
+        if p.tipo == "recurrente":
+            try:
+                horas = horas_del_dia(p.hora_recurrente() or "08:00", p.intervalo_minutos, p.hora_fin)
+            except ValueError:
+                horas = []
+            progs.append(("email", p.id, (p.campana or "").strip().lower(), None, horas))
+        else:
+            progs.append(("email", p.id, (p.campana or "").strip().lower(), p.fecha_programada.date(),
+                          [p.fecha_programada.strftime("%H:%M")]))
+    return progs
+
+
+def _origen_envio(canal, campana, inicio, progs, ejecuciones):
+    """
+    {"tipo": "programacion"/"manual", "id"}: programación si hay una ejecución
+    registrada de esa campaña a menos de 10 min, o una programación con esa
+    campaña y un turno a esa hora (±15 min). inicio: hora de Colombia sin zona.
+    """
+    nombre = (campana or "").strip().lower()
+    for e in ejecuciones:
+        if e.canal == canal and (e.campana or "").strip().lower() == nombre and abs(e.fecha - inicio) <= timedelta(minutes=10):
+            return {"tipo": "programacion", "id": e.programacion_id}
+    minuto = inicio.hour * 60 + inicio.minute
+    for c, pid, camp, fecha, horas in progs:
+        if c != canal or camp != nombre or (fecha and fecha != inicio.date()):
+            continue
+        if any(abs(int(h[:2]) * 60 + int(h[3:5]) - minuto) <= 15 for h in horas):
+            return {"tipo": "programacion", "id": str(pid)}
+    return {"tipo": "manual", "id": None}
+
+
+@app.route("/api/envios")
+def api_envios():
+    """
+    Envíos entre ?desde y ?hasta (días de Colombia) de ?canal=sms|email (los dos
+    si no va). ?destino= solo los envíos que incluyen ese teléfono o email. Si
+    un canal falla, el otro responde igual y el error va en 'avisos'.
+    """
+    import historial_envios
+    from bigquery import mensaje_error_bigquery
+    from database import EjecucionProgramacion
+    try:
+        desde, hasta = _rango_envios()
+    except ValueError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+    if not _asegurar_bq():
+        return jsonify({"success": False, "message": "No se pudo conectar a BigQuery."}), 500
+    canal = request.args.get("canal") or ""
+    destino = (request.args.get("destino") or "").strip()
+    progs = _programaciones_para_origen()
+    ejecuciones = EjecucionProgramacion.query.filter(
+        EjecucionProgramacion.fecha >= desde.astimezone(COLOMBIA_TZ).replace(tzinfo=None) - timedelta(hours=1)).all()
+    items, avisos = [], []
+
+    if canal in ("", "sms"):
+        try:
+            for e in historial_envios.envios_sms(bq_client, desde, hasta, destino):
+                inicio = e["inicio"].astimezone(COLOMBIA_TZ).replace(tzinfo=None)
+                items.append({
+                    "canal": "sms", "campana": e["campana"], "usuario": e["usuario"],
+                    "inicio": _a_colombia(e["inicio"]), "fin": _a_colombia(e["fin"]),
+                    "inicio_utc": e["inicio"].isoformat(), "fin_utc": e["fin"].isoformat(),
+                    "mensaje": e["plantilla"], "ejemplo": e["ejemplo"], "consulta": e["consulta"],
+                    "mensajes": e["mensajes"], "entregados": e["entregados"], "fallidos": e["fallidos"],
+                    "pendientes": e["pendientes"], "sin_reporte": e["sin_reporte"], "costo": round(e["costo"]),
+                    "bulk_ids": e["bulk_ids"], "origen": _origen_envio("sms", e["campana"], inicio, progs, ejecuciones),
+                })
+        except Exception as exc:
+            logger_sms.exception("❌ Error leyendo el historial de envíos SMS")
+            avisos.append(f"SMS: {mensaje_error_bigquery(exc)}")
+
+    if canal in ("", "email"):
+        try:
+            for e in historial_envios.envios_email(bq_client, desde, hasta, destino):
+                inicio = e["inicio"].astimezone(COLOMBIA_TZ).replace(tzinfo=None)
+                items.append({
+                    "canal": "email", "campana": e["campana"] or "", "usuario": e["usuario"],
+                    "inicio": _a_colombia(e["inicio"]), "fin": _a_colombia(e["fin"]),
+                    "mensaje": e["asunto"] or "", "ejemplo": e["contenido"] or "", "consulta": "",
+                    "mensajes": e["mensajes"], "entregados": None, "fallidos": e["fallidos"],
+                    "pendientes": None, "sin_reporte": None, "costo": None,
+                    "bulk_ids": [e["bulk_id"]] if e["bulk_id"] else [], "campana_id": e["bulk_id"],
+                    "origen": _origen_envio("email", e["campana"], inicio, progs, ejecuciones),
+                })
+        except Exception as exc:
+            logger_email.exception("❌ Error leyendo el historial de envíos de email")
+            avisos.append(f"Email: {mensaje_error_bigquery(exc)}")
+
+    items.sort(key=lambda i: i["inicio"], reverse=True)
+    return jsonify({"success": True, "items": items, "avisos": avisos,
+                    "desde": desde.astimezone(COLOMBIA_TZ).date().isoformat(),
+                    "hasta": (hasta.astimezone(COLOMBIA_TZ) - timedelta(days=1)).date().isoformat()})
+
+
+def _detalle_envio():
+    """Filas del detalle de un envío según ?canal (sms: campana, inicio_utc, fin_utc; email: campana_id)."""
+    import historial_envios
+    if request.args.get("canal") == "email":
+        filas = historial_envios.detalle_email(bq_client, request.args.get("campana_id") or "")
+        return [{"destino": f["email"], "fecha": _a_colombia(f["fecha_envio"]), "estado": f["resultado"] or "",
+                 "error": f["error"] or "", "mensaje": f["asunto"] or ""} for f in filas]
+    inicio = datetime.fromisoformat(request.args["inicio_utc"])
+    fin = datetime.fromisoformat(request.args["fin_utc"])
+    filas = historial_envios.detalle_sms(bq_client, request.args.get("campana") or "", inicio, fin)
+    return [{"destino": f["telefono"], "fecha": _a_colombia(f["fecha_envio"]), "estado": f["categoria"],
+             "estado_infobip": f["estado_infobip"] or f["resultado"] or "", "error": f["error"] or "",
+             "mensaje": f["mensaje"] or "", "costo": round(f["costo"] or 0, 1), "bulk_id": f["bulk_id"] or "",
+             "message_id": f["message_id"] or ""} for f in filas]
+
+
+@app.route("/api/envios/detalle")
+def api_envios_detalle():
+    """Cada mensaje de un envío (máximo 5.000), con su estado."""
+    from bigquery import mensaje_error_bigquery
+    if not _asegurar_bq():
+        return jsonify({"success": False, "message": "No se pudo conectar a BigQuery."}), 500
+    try:
+        return jsonify({"success": True, "filas": _detalle_envio()})
+    except (KeyError, ValueError):
+        return jsonify({"success": False, "message": "Faltan los datos del envío."}), 400
+    except Exception as exc:
+        logger.exception("Error leyendo el detalle del envío")
+        return jsonify({"success": False, "message": mensaje_error_bigquery(exc)}), 500
+
+
+@app.route("/api/envios/exportar")
+def api_envios_exportar():
+    """CSV (;) con cada mensaje de un envío."""
+    import csv
+    if not _asegurar_bq():
+        return jsonify({"success": False, "message": "No se pudo conectar a BigQuery."}), 500
+    try:
+        filas = _detalle_envio()
+    except (KeyError, ValueError):
+        return jsonify({"success": False, "message": "Faltan los datos del envío."}), 400
+    salida = io.StringIO()
+    salida.write("﻿")
+    columnas = ["destino", "fecha", "estado", "estado_infobip", "error", "costo", "mensaje", "bulk_id", "message_id"]
+    escritor = csv.DictWriter(salida, fieldnames=columnas, delimiter=";", extrasaction="ignore")
+    escritor.writeheader()
+    escritor.writerows(filas)
+    nombre = re.sub(r"[^\w\-]+", "_", request.args.get("campana") or request.args.get("campana_id") or "envio")[:60]
+    return send_file(io.BytesIO(salida.getvalue().encode("utf-8")), as_attachment=True,
+                     download_name=f"envio_{request.args.get('canal') or 'sms'}_{nombre}.csv", mimetype="text/csv")
+
+
+@app.route("/api/envios/email/<campana_id>/estado")
+def api_envios_email_estado(campana_id):
+    """Estado de la campaña en la plataforma de email (si salió, a cuántos, cuándo empezó y terminó)."""
+    email_config = load_config().get("email", {})
+    if not email_config.get("api_key"):
+        return jsonify({"success": False, "message": "Falta email.api_key en config.json."}), 400
+    try:
+        datos = EmailClient(email_config["api_key"]).detalle_campana(campana_id).get("data", {})
+    except EmailClientError as exc:
+        if "NotFound" in str(exc):
+            return jsonify({"success": True, "existe": False, "message":
+                            "Esta campaña no existe en la cuenta de email configurada: no salió por esta cuenta."})
+        return jsonify({"success": False, "message": f"La plataforma de email no respondió: {exc}"}), 502
+    return jsonify({"success": True, "existe": True, "status": datos.get("status"),
+                    "destinatarios": datos.get("recipients_count"), "inicio": datos.get("start_date"),
+                    "fin": datos.get("finish_date"), "remitente": datos.get("fromEmail")})
+
+
 # ================== API PROGRAMACIONES ==================
 
 def _prog_sms_a_dict(prog):
@@ -1806,9 +2346,14 @@ def _prog_sms_a_dict(prog):
         'ultimo_error': prog.ultimo_error or '',
         'total_destinatarios': prog.total_destinatarios,
         'ultimo_enviados': prog.ultimo_enviados,
+        'id_mensaje': prog.id_mensaje or '',
+        'id_campana': prog.id_campana or '',
+        'link': prog.link or '',
         'confirmar_reenvio': prog.confirmar_reenvio,
         'fecha_programada': prog.fecha_programada.isoformat() if prog.fecha_programada else None,
         'hora_inicio': prog.hora_inicio,
+        'intervalo_minutos': prog.intervalo_minutos,
+        'hora_fin': prog.hora_fin,
         'fecha_fin': prog.fecha_fin,
         'fecha_ejecucion': prog.fecha_ejecucion.isoformat() if prog.fecha_ejecucion else None,
         'fecha_creacion': prog.fecha_creacion.isoformat() if prog.fecha_creacion else None,
@@ -1889,6 +2434,12 @@ def api_update_programacion(prog_id):
         return jsonify({"success": False, "message": "Una programación con base en Excel solo puede ser simple."}), 400
     if tipo == "recurrente" and not re.match(r'^\d{2}:\d{2}$', hora_inicio):
         return jsonify({"success": False, "message": "Hora de envío inválida. Use HH:MM."}), 400
+    if "intervalo_minutos" in data:
+        intervalo_minutos, hora_fin, error_horario = _leer_repeticion(data, hora_inicio)
+    else:
+        intervalo_minutos, hora_fin, error_horario = prog.intervalo_minutos, prog.hora_fin, None
+    if tipo == "recurrente" and error_horario:
+        return jsonify({"success": False, "message": error_horario}), 400
 
     fecha_programada = None
     if tipo == "simple":
@@ -1925,10 +2476,19 @@ def api_update_programacion(prog_id):
         prog.fecha_programada = None
         prog.hora_inicio = hora_inicio
         prog.fecha_fin = fecha_fin
+    # La repetición en el día solo aplica a recurrentes.
+    prog.intervalo_minutos = intervalo_minutos if tipo == "recurrente" else None
+    prog.hora_fin = hora_fin if tipo == "recurrente" else None
     if "usuario" in data:
         prog.usuario = (data.get("usuario") or "").strip()
     if "confirmar_reenvio" in data:
         prog.confirmar_reenvio = bool(data.get("confirmar_reenvio"))
+    if "id_mensaje" in data:
+        prog.id_mensaje = (data.get("id_mensaje") or "").strip() or None
+    if "id_campana" in data:
+        prog.id_campana = (data.get("id_campana") or "").strip() or None
+    if "link" in data:
+        prog.link = (data.get("link") or "").strip() or None
     # Editar una programación con error o ya ejecutada la deja pendiente otra vez.
     prog.estado = 'pendiente'
     prog.ultimo_error = None
@@ -2014,7 +2574,7 @@ def dashboards_page():
 
 
 def _infobip_config():
-    infobip = (CONFIG or load_config()).get("infobip", {})
+    infobip = load_config().get("infobip", {})
     return infobip.get("api_key", "").strip(), infobip.get("base_url", "").strip()
 
 
@@ -2023,7 +2583,7 @@ def get_dashboards():
     """
     Dashboard de SMS (cálculos en dashboard_sms.py).
     Fuente por defecto: todos los SMS de la cuenta de Infobip, copiados a
-    BigQuery (Temporal.SmsInfobip) por el job sms_infobip_sync, con
+    BigQuery (Temporal.SmsInfobip_Valoro) por el job sms_infobip_sync, con
     ?periodo=hoy|ayer|48h|7d o ?desde=AAAA-MM-DD&hasta=AAAA-MM-DD.
     ?fuente=smslog: solo lo enviado desde la app (SmsLog, histórico), con ?horas=N o fechas.
     """
@@ -2058,7 +2618,7 @@ def _filtros_detalle_infobip():
 
 @app.route("/api/dashboards/mensajes", methods=["GET"])
 def dashboards_mensajes():
-    """SMS de Infobip (tabla SmsInfobip) filtrados (bulk_id, estado, operador, error, buscar), de a 500 por página."""
+    """SMS de Infobip (tabla SmsInfobip_Valoro) filtrados (bulk_id, estado, operador, error, buscar), de a 500 por página."""
     import dashboard_sms
     if not _asegurar_bq():
         return jsonify({"success": False, "message": "No se pudo inicializar BigQuery."}), 500
@@ -2072,7 +2632,7 @@ def dashboards_mensajes():
 
 @app.route("/api/dashboards/exportar", methods=["GET"])
 def dashboards_exportar():
-    """CSV (;) con los SMS de Infobip (tabla SmsInfobip) que cumplen los filtros (máximo 300.000)."""
+    """CSV (;) con los SMS de Infobip (tabla SmsInfobip_Valoro) que cumplen los filtros (máximo 300.000)."""
     import csv
     import dashboard_sms
     if not _asegurar_bq():
@@ -2097,7 +2657,7 @@ def _sincronizar_sms_infobip(horas=2, dia_anterior=False):
     """
     Jobs sms_infobip_sync (cada 5 min, últimas 2 horas: los SMS que todavía
     cambian de estado) y sms_infobip_sync_dia (03:00, el día anterior completo
-    con sus estados finales): copian los SMS de Infobip a Temporal.SmsInfobip.
+    con sus estados finales): copian los SMS de Infobip a Temporal.SmsInfobip_Valoro.
     La primera corrida tras arrancar la app copia desde las 00:00 (cubre el
     tiempo que la app estuvo apagada). En la copia de prueba no corren (escriben en BigQuery).
     """
@@ -2144,7 +2704,7 @@ def dashboards_actualizar_estados():
     from services.sms_service import actualizar_estados_pendientes
     if es_copia_prueba():
         return jsonify({"success": False, "message": "En la copia de prueba no se actualizan estados (escribe en SmsLog)."}), 400
-    infobip = (CONFIG or load_config()).get("infobip", {})
+    infobip = load_config().get("infobip", {})
     api_key, base_url = infobip.get("api_key", "").strip(), infobip.get("base_url", "").strip()
     if not api_key or not base_url:
         return jsonify({"success": False, "message": "Falta la configuración de Infobip en config.json."}), 400
@@ -2302,4 +2862,4 @@ if __name__ == "__main__":
     # Puerto configurable con la variable de entorno PORT (por defecto 5000),
     # para poder correr una copia de prueba sin chocar con la aplicación real.
     app.run(debug=False, use_reloader=False, host="0.0.0.0",
-            port=int(os.environ.get("PORT", "5000")))
+            port=int(os.environ.get("PORT", "3001")))

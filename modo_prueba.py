@@ -5,7 +5,7 @@ Con la variable de entorno APP_COPIA_PRUEBA=1 la aplicación arranca como
 copia de prueba y omite tareas automáticas que escriben en BigQuery de
 producción:
   - no programa el polling de estados SMS (backend.polling_estados_sms);
-  - no sincroniza los SMS de Infobip a Temporal.SmsInfobip
+  - no sincroniza los SMS de Infobip a Temporal.SmsInfobip_Valoro
     (app._sincronizar_sms_infobip) ni deja actualizar estados a mano;
   - no recarga las programaciones de email pendientes al arrancar
     (la tabla es compartida y las enviaría la app de producción);

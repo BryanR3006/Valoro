@@ -1,0 +1,427 @@
+{% extends "layouts/adminlte.html" %}
+{# Historial de envíos: todo lo que salió (SMS y email, manual o programado), un
+   envío por fila, como el historial de programaciones. Datos de /api/envios
+   (historial_envios.py); destinatarios de /api/envios/detalle. #}
+
+{% block title %}Envíos{% endblock %}
+
+{% block page_title %}<h1>Historial de envíos</h1>{% endblock %}
+{% block page_subtitle %}Todo lo enviado por SMS y email: cuándo, a cuántos, cuántos llegaron, cuánto costó y a quién.{% endblock %}
+
+{% block extra_css %}
+<style>
+  .he-card { overflow: hidden; }
+  .he-card .card-header { flex-wrap: wrap; gap: 12px; }
+  .he-filtros { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .he-filtros select, .he-filtros input {
+    border: 1.5px solid var(--border); border-radius: 8px; padding: 6px 12px;
+    font-size: 0.8rem; background: #fff; color: var(--text-primary); height: 34px;
+  }
+  .he-filtros input[type="search"] { min-width: 190px; }
+  .he-filtros label { font-size: 0.74rem; color: var(--text-secondary); font-weight: 600; margin: 0; }
+
+  .he-cifras { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; padding: 16px 20px 0; }
+  .he-cifra { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 14px; background: var(--bg-card); }
+  .he-cifra span { display: block; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); font-weight: 700; }
+  .he-cifra b { font-size: 1.3rem; color: var(--text-primary); }
+  .he-cifra.ok b { color: #1d5c12; }
+  .he-cifra.mal b { color: var(--danger); }
+
+  .he-tabla-wrap { overflow-x: auto; }
+  .he-tabla { width: 100%; min-width: 1100px; font-size: 0.84rem; }
+  .he-tabla th { white-space: nowrap; text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.04em; }
+  .he-tabla td { vertical-align: middle; }
+  .he-cuando { white-space: nowrap; }
+  .he-cuando small, .he-nombre small { display: block; color: var(--text-muted); font-size: 0.72rem; }
+  .he-nombre strong { display: block; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .he-mensaje {
+    max-width: 280px; color: var(--text-secondary); cursor: pointer;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .he-mensaje:hover { color: var(--primary); }
+  .he-canal-sms { background: var(--primary-light); color: var(--primary); }
+  .he-canal-email { background: var(--info-bg); color: var(--info); }
+  .he-num { text-align: right; white-space: nowrap; }
+  .he-entrega { min-width: 150px; }
+  .he-barra { display: flex; height: 7px; border-radius: 4px; overflow: hidden; background: var(--border-light); margin-bottom: 3px; }
+  .he-barra .ok { background: #3c9a2a; }
+  .he-barra .mal { background: #d9534f; }
+  .he-barra .pend { background: #f0c419; }
+  .he-entrega small { font-size: 0.72rem; color: var(--text-secondary); white-space: nowrap; }
+  .he-acciones { display: inline-flex; gap: 4px; }
+  .he-acciones .btn { padding: 4px 9px; }
+  .he-vacio { text-align: center; padding: 56px 20px; color: var(--text-secondary); }
+  .he-vacio i { font-size: 2.6rem; display: block; margin-bottom: 12px; opacity: 0.3; }
+  .he-footer {
+    padding: 12px 20px; border-top: 1px solid var(--border); display: flex;
+    justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.8rem; color: var(--text-secondary);
+  }
+  .he-footer .total { font-weight: 700; color: var(--primary); }
+
+  /* Modales */
+  #verModal .modal-box, #destModal .modal-box { max-width: 820px; }
+  .he-detalle { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; margin-bottom: 16px; }
+  .he-detalle div { font-size: 0.84rem; }
+  .he-detalle span { display: block; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); font-weight: 700; }
+  .he-bloque-titulo { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); font-weight: 700; margin: 14px 0 6px; }
+  .he-texto {
+    background: var(--bg-code); border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+    padding: 10px 12px; font-size: 0.84rem; white-space: pre-wrap; word-break: break-word;
+  }
+  .he-sql { font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 0.78rem; max-height: 180px; overflow: auto; }
+  .he-html { width: 100%; height: 320px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fff; }
+  .he-dest-filtros { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .he-dest-filtros input, .he-dest-filtros select {
+    border: 1.5px solid var(--border); border-radius: 8px; padding: 5px 10px; font-size: 0.8rem; height: 32px;
+  }
+  .he-dest-lista { max-height: 420px; overflow: auto; }
+  .he-dest-lista table { font-size: 0.8rem; width: 100%; }
+  .he-dest-lista td { vertical-align: top; }
+  .he-dest-error { color: #B42318; font-size: 0.74rem; }
+  @media (max-width: 768px) {
+    .he-detalle { grid-template-columns: 1fr; }
+    .he-filtros input[type="search"] { min-width: 0; flex: 1; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="smsToastArea"></div>
+
+<!-- VER ENVÍO -->
+<div class="modal-overlay" id="verModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3><i class="fas fa-eye"></i> <span id="verTitulo">Envío</span></h3>
+      <button class="modal-close" data-cerrar="verModal">&times;</button>
+    </div>
+    <div class="modal-body" id="verCuerpo"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-cerrar="verModal">Cerrar</button>
+      <button class="btn btn-success" id="verDestinatarios"><i class="fas fa-users"></i> Ver destinatarios</button>
+    </div>
+  </div>
+</div>
+
+<!-- DESTINATARIOS DE UN ENVÍO -->
+<div class="modal-overlay" id="destModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3><i class="fas fa-users"></i> <span id="destTitulo">Destinatarios</span></h3>
+      <button class="modal-close" data-cerrar="destModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="he-dest-filtros">
+        <input type="search" id="dBuscar" placeholder="Buscar teléfono o email...">
+        <select id="dEstado"><option value="">Todos los estados</option></select>
+        <span id="dConteo" class="text-muted" style="font-size:0.8rem;align-self:center;"></span>
+      </div>
+      <div class="he-dest-lista" id="destLista"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-cerrar="destModal">Cerrar</button>
+      <a class="btn btn-success" id="destCsv" href="#"><i class="fas fa-file-csv"></i> Descargar CSV</a>
+    </div>
+  </div>
+</div>
+
+<!-- TABLA -->
+<div class="card he-card">
+  <div class="card-header">
+    <h3><i class="fas fa-paper-plane"></i> Todo lo enviado</h3>
+    <div class="he-filtros">
+      <label for="fDesde">Desde</label><input type="date" id="fDesde">
+      <label for="fHasta">Hasta</label><input type="date" id="fHasta">
+      <select id="fCanal">
+        <option value="">Todos los canales</option>
+        <option value="sms">SMS</option>
+        <option value="email">Email</option>
+      </select>
+      <select id="fOrigen">
+        <option value="">Manual y programado</option>
+        <option value="manual">Manual</option>
+        <option value="programacion">De una programación</option>
+      </select>
+      <input type="search" id="fDestino" placeholder="Teléfono o email que recibió...">
+      <input type="search" id="fBuscar" placeholder="Buscar campaña, mensaje o usuario...">
+      <button class="btn btn-primary btn-sm" id="btnBuscar"><i class="fas fa-search"></i> Consultar</button>
+    </div>
+  </div>
+  <div class="he-cifras" id="heCifras"></div>
+  <div class="he-tabla-wrap" id="heLista">
+    <div class="he-vacio"><i class="fas fa-spinner fa-spin"></i><p>Cargando envíos...</p></div>
+  </div>
+  <div class="he-footer" id="heFooter" style="display:none;">
+    <span><i class="fas fa-info-circle"></i> Mostrando <span class="total" id="heTotal">0</span> de <span id="heTodos">0</span> envíos ·
+      el estado de los SMS se actualiza con Infobip cada 5 min</span>
+    <span><i class="fas fa-calendar-alt"></i> Actualizado: <span id="heHora">—</span></span>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+  'use strict';
+
+  const $ = id => document.getElementById(id);
+
+  function esc(str) {
+    if (str === null || str === undefined) return '';
+    return String(str).replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
+  }
+
+  function toast(msg, type) {
+    const icons = { success: 'fa-check-circle', danger: 'fa-exclamation-circle', warning: 'fa-exclamation-triangle', info: 'fa-info-circle' };
+    const t = document.createElement('div');
+    t.className = 'sms-toast ' + (type || 'info');
+    t.innerHTML = `<span class="icon"><i class="fas ${icons[type] || icons.info}"></i></span><div class="content"></div>
+      <button class="close-btn">&times;</button>`;
+    t.querySelector('.content').textContent = msg;
+    t.querySelector('.close-btn').addEventListener('click', () => t.remove());
+    $('smsToastArea').appendChild(t);
+    setTimeout(() => t.remove(), 6000);
+  }
+
+  const num = v => v === null || v === undefined ? '—' : Number(v).toLocaleString('es-CO');
+  const pesos = v => v === null || v === undefined ? '—' : '$' + Math.round(v).toLocaleString('es-CO');
+  // 'AAAA-MM-DD HH:MM:SS' (hora de Colombia) → 'DD/MM/AAAA HH:MM'
+  function fecha(texto) {
+    const m = String(texto || '').match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : (texto || '—');
+  }
+  function hoyColombia(diasAtras) {
+    const d = new Date(Date.now() - (diasAtras || 0) * 86400000);
+    return d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+  }
+
+  let TODOS = [];
+
+  async function cargar() {
+    $('heLista').innerHTML = '<div class="he-vacio"><i class="fas fa-spinner fa-spin"></i><p>Cargando envíos...</p></div>';
+    $('heFooter').style.display = 'none';
+    $('heCifras').innerHTML = '';
+    const params = new URLSearchParams({ desde: $('fDesde').value, hasta: $('fHasta').value });
+    if ($('fCanal').value) params.set('canal', $('fCanal').value);
+    if ($('fDestino').value.trim()) params.set('destino', $('fDestino').value.trim());
+    try {
+      const resp = await fetch('/api/envios?' + params);
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.message || `Error HTTP ${resp.status}`);
+      TODOS = data.items || [];
+      (data.avisos || []).forEach(a => toast(a, 'danger'));
+      $('heHora').textContent = new Date().toLocaleString('es-CO');
+      pintar();
+    } catch (e) {
+      TODOS = [];
+      $('heLista').innerHTML = `<div class="he-vacio"><i class="fas fa-exclamation-circle"></i><p>${esc(e.message)}</p></div>`;
+    }
+  }
+
+  function filtrados() {
+    const origen = $('fOrigen').value, q = $('fBuscar').value.trim().toLowerCase();
+    return TODOS.filter(e =>
+      (!origen || e.origen.tipo === origen) &&
+      (!q || `${e.campana} ${e.mensaje} ${e.usuario} ${(e.bulk_ids || []).join(' ')}`.toLowerCase().includes(q)));
+  }
+
+  function pintarCifras(lista) {
+    const suma = campo => lista.reduce((t, e) => t + (e[campo] || 0), 0);
+    const sms = lista.filter(e => e.canal === 'sms'), email = lista.filter(e => e.canal === 'email');
+    const sumaDe = (l, campo) => l.reduce((t, e) => t + (e[campo] || 0), 0);
+    const cifra = (titulo, valor, clase) => `<div class="he-cifra ${clase || ''}"><span>${titulo}</span><b>${valor}</b></div>`;
+    $('heCifras').innerHTML =
+      cifra('Envíos', num(lista.length)) +
+      cifra('SMS enviados', num(sumaDe(sms, 'mensajes'))) +
+      cifra('SMS entregados', num(sumaDe(sms, 'entregados')), 'ok') +
+      cifra('SMS fallidos', num(sumaDe(sms, 'fallidos')), 'mal') +
+      cifra('Costo SMS', pesos(suma('costo'))) +
+      cifra('Emails enviados', num(sumaDe(email, 'mensajes')));
+  }
+
+  function celdaEntrega(e) {
+    if (e.canal === 'email') {
+      return `<small>${num(e.mensajes)} enviados${e.fallidos ? ' · ' + num(e.fallidos) + ' con error' : ''}</small>
+        <br><small>Estado real: en <i class="fas fa-eye"></i> Ver</small>`;
+    }
+    const total = e.mensajes || 1;
+    const pct = v => (100 * (v || 0) / total).toFixed(1);
+    const partes = [`${num(e.entregados)} entregados`, `${num(e.fallidos)} fallidos`];
+    if (e.pendientes) partes.push(`${num(e.pendientes)} pendientes`);
+    if (e.sin_reporte) partes.push(`${num(e.sin_reporte)} sin reporte`);
+    return `<div class="he-barra" title="${esc(partes.join(' · '))}">
+        <div class="ok" style="width:${pct(e.entregados)}%"></div><div class="mal" style="width:${pct(e.fallidos)}%"></div>
+        <div class="pend" style="width:${pct(e.pendientes)}%"></div></div>
+      <small>${esc(partes.slice(0, 2).join(' · '))}</small>`;
+  }
+
+  function celdaOrigen(e) {
+    if (e.origen.tipo !== 'programacion') return '<span class="badge badge-secondary"><i class="fas fa-hand-pointer"></i> Manual</span>';
+    const etiqueta = e.canal === 'sms' ? '#' + e.origen.id : String(e.origen.id).slice(0, 8);
+    return `<a class="badge badge-info" href="/programaciones" title="Ver en el historial de programaciones">
+      <i class="fas fa-calendar-alt"></i> Programación ${esc(etiqueta)}</a>`;
+  }
+
+  function pintar() {
+    const lista = filtrados();
+    pintarCifras(lista);
+    $('heTotal').textContent = lista.length;
+    $('heTodos').textContent = TODOS.length;
+    $('heFooter').style.display = TODOS.length ? 'flex' : 'none';
+    if (!lista.length) {
+      $('heLista').innerHTML = `<div class="he-vacio"><i class="fas fa-inbox"></i>
+        <p>${TODOS.length ? 'Ningún envío con esos filtros.' : 'No hay envíos en esas fechas.'}</p></div>`;
+      return;
+    }
+    $('heLista').innerHTML = `
+      <table class="table he-tabla">
+        <thead><tr>
+          <th>Fecha / hora</th><th>Canal</th><th>Campaña</th><th>Mensaje</th><th>Origen</th>
+          <th class="he-num">Mensajes</th><th>Entrega</th><th class="he-num">Costo</th><th style="text-align:center;">Acciones</th>
+        </tr></thead>
+        <tbody>${lista.map((e, i) => `
+          <tr>
+            <td class="he-cuando">${fecha(e.inicio)}${e.fin && e.fin.slice(0, 16) !== e.inicio.slice(0, 16) ? `<small>hasta ${fecha(e.fin).slice(11)}</small>` : ''}</td>
+            <td><span class="badge he-canal-${e.canal}"><i class="fas ${e.canal === 'sms' ? 'fa-sms' : 'fa-envelope'}"></i> ${e.canal === 'sms' ? 'SMS' : 'Email'}</span></td>
+            <td class="he-nombre"><strong title="${esc(e.campana)}">${esc(e.campana) || 'Sin nombre'}</strong><small>${esc(e.usuario) || 'Sin usuario'}</small></td>
+            <td><div class="he-mensaje ver-btn" data-i="${i}" title="Ver el envío completo">${esc(e.canal === 'email' ? 'Asunto: ' + (e.mensaje || '(sin asunto)') : e.mensaje) || '—'}</div></td>
+            <td>${celdaOrigen(e)}</td>
+            <td class="he-num"><strong>${num(e.mensajes)}</strong></td>
+            <td class="he-entrega">${celdaEntrega(e)}</td>
+            <td class="he-num">${e.canal === 'sms' ? pesos(e.costo) : '—'}</td>
+            <td style="text-align:center;"><div class="he-acciones">
+              <button class="btn btn-outline-secondary btn-sm ver-btn" data-i="${i}" title="Ver"><i class="fas fa-eye"></i></button>
+              <button class="btn btn-outline-primary btn-sm dest-btn" data-i="${i}" title="Destinatarios"><i class="fas fa-users"></i></button>
+              <a class="btn btn-outline-success btn-sm" href="${urlDetalle(e, '/api/envios/exportar')}" title="Descargar CSV"><i class="fas fa-file-csv"></i></a>
+            </div></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+    $('heLista').querySelectorAll('.ver-btn').forEach(b => b.addEventListener('click', () => abrirVer(lista[b.dataset.i])));
+    $('heLista').querySelectorAll('.dest-btn').forEach(b => b.addEventListener('click', () => abrirDestinatarios(lista[b.dataset.i])));
+  }
+
+  function urlDetalle(e, ruta) {
+    const p = e.canal === 'email'
+      ? new URLSearchParams({ canal: 'email', campana_id: e.campana_id || '', campana: e.campana || '' })
+      : new URLSearchParams({ canal: 'sms', campana: e.campana || '', inicio_utc: e.inicio_utc, fin_utc: e.fin_utc });
+    return `${ruta}?${p}`;
+  }
+
+  // ========== VER ==========
+  let viendo = null;
+  function abrirVer(e) {
+    viendo = e;
+    $('verTitulo').textContent = `${e.canal === 'sms' ? 'SMS' : 'Email'} · ${e.campana || 'Sin nombre'}`;
+    const dato = (titulo, valor) => `<div><span>${titulo}</span>${valor}</div>`;
+    let html = `<div class="he-detalle">
+      ${dato('Fecha', fecha(e.inicio) + (e.fin && e.fin.slice(0, 16) !== e.inicio.slice(0, 16) ? ' a ' + fecha(e.fin).slice(11) : ''))}
+      ${dato('Origen', celdaOrigen(e))}
+      ${dato('Usuario', esc(e.usuario) || '—')}
+      ${dato('Mensajes', num(e.mensajes))}`;
+    if (e.canal === 'sms') {
+      html += `${dato('Entregados', num(e.entregados))}${dato('Fallidos', num(e.fallidos))}
+        ${dato('Pendientes / sin reporte', `${num(e.pendientes)} / ${num(e.sin_reporte)}`)}${dato('Costo', pesos(e.costo))}
+        <div style="grid-column:1/-1;"><span>Lotes de Infobip (bulk_id)</span>${esc((e.bulk_ids || []).join(', ')) || '—'}</div></div>
+        <div class="he-bloque-titulo">Plantilla</div><div class="he-texto">${esc(e.mensaje) || '—'}</div>
+        <div class="he-bloque-titulo">Ejemplo de un SMS enviado</div><div class="he-texto">${esc(e.ejemplo) || '—'}</div>
+        <div class="he-bloque-titulo">Consulta</div><div class="he-texto he-sql">${esc(e.consulta) || '—'}</div>`;
+    } else {
+      html += `${dato('Campaña en la plataforma de email', esc(e.campana_id) || '—')}
+        <div id="verEstadoEmail" style="grid-column:1/-1;"><span>Estado en la plataforma de email</span><i class="fas fa-spinner fa-spin"></i> Consultando...</div></div>
+        <div class="he-bloque-titulo">Asunto</div><div class="he-texto">${esc(e.mensaje) || '—'}</div>
+        <div class="he-bloque-titulo">Contenido (ejemplo con los datos del primer cliente)</div><iframe class="he-html" sandbox="" id="verHtml"></iframe>`;
+    }
+    $('verCuerpo').innerHTML = html;
+    if (e.canal === 'email') {
+      $('verHtml').srcdoc = e.ejemplo || '';
+      estadoEmail(e.campana_id);
+    }
+    $('verModal').classList.add('active');
+  }
+
+  // Si la campaña de verdad salió: lo dice la plataforma de email, no EmailLog.
+  async function estadoEmail(id) {
+    const caja = $('verEstadoEmail');
+    const poner = h => { if (caja) caja.innerHTML = '<span>Estado en la plataforma de email</span>' + h; };
+    if (!id) return poner('—');
+    try {
+      const data = await (await fetch(`/api/envios/email/${encodeURIComponent(id)}/estado`)).json();
+      if (!data.success) return poner(`<span class="text-danger">${esc(data.message)}</span>`);
+      if (!data.existe) return poner(`<span class="badge badge-danger"><i class="fas fa-times-circle"></i> No salió</span> ${esc(data.message)}`);
+      const salio = data.status && data.status !== 'Draft';
+      poner(`<span class="badge badge-${salio ? 'success' : 'danger'}"><i class="fas ${salio ? 'fa-check-circle' : 'fa-times-circle'}"></i> ${esc(data.status)}</span>
+        ${num(data.destinatarios)} destinatarios${data.inicio ? ' · inició ' + esc(data.inicio) : ''}${data.fin ? ' · terminó ' + esc(data.fin) : ''}
+        ${salio ? '' : ' · <b>quedó en borrador: no se envió</b>'}`);
+    } catch (err) { poner('<span class="text-danger">No se pudo consultar.</span>'); }
+  }
+  $('verDestinatarios').addEventListener('click', () => { cerrar('verModal'); abrirDestinatarios(viendo); });
+
+  // ========== DESTINATARIOS ==========
+  const ESTADO_DEST = {
+    entregado: ['Entregado', 'success'], fallido: ['Fallido', 'danger'], pendiente: ['Pendiente', 'warning'],
+    sin_reporte: ['Sin reporte', 'secondary'], enviado: ['Enviado', 'success']
+  };
+  let DEST = [], destEnvio = null;
+  async function abrirDestinatarios(e) {
+    destEnvio = e;
+    DEST = [];
+    $('destTitulo').textContent = `Destinatarios · ${e.campana || 'Sin nombre'} (${fecha(e.inicio)})`;
+    $('destCsv').href = urlDetalle(e, '/api/envios/exportar');
+    $('dBuscar').value = '';
+    $('dEstado').innerHTML = '<option value="">Todos los estados</option>';
+    $('dConteo').textContent = '';
+    $('destLista').innerHTML = '<div class="he-vacio"><i class="fas fa-spinner fa-spin"></i><p>Cargando...</p></div>';
+    $('destModal').classList.add('active');
+    try {
+      const resp = await fetch(urlDetalle(e, '/api/envios/detalle'));
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.message || `Error HTTP ${resp.status}`);
+      if (destEnvio !== e) return;
+      DEST = data.filas || [];
+      const estados = [...new Set(DEST.map(d => d.estado))];
+      $('dEstado').innerHTML = '<option value="">Todos los estados</option>' +
+        estados.map(s => `<option value="${esc(s)}">${esc((ESTADO_DEST[s] || [s])[0])} (${DEST.filter(d => d.estado === s).length})</option>`).join('');
+      pintarDest();
+    } catch (err) {
+      $('destLista').innerHTML = `<div class="he-vacio"><i class="fas fa-exclamation-circle"></i><p>${esc(err.message)}</p></div>`;
+    }
+  }
+
+  function pintarDest() {
+    const q = $('dBuscar').value.trim().toLowerCase(), estado = $('dEstado').value;
+    const filas = DEST.filter(d => (!estado || d.estado === estado) && (!q || String(d.destino).toLowerCase().includes(q)));
+    $('dConteo').textContent = `${num(filas.length)} de ${num(DEST.length)}${DEST.length >= 5000 ? ' (máximo 5.000: descarga el CSV para ver todos)' : ''}`;
+    const sms = destEnvio && destEnvio.canal === 'sms';
+    $('destLista').innerHTML = filas.length ? `<table class="table">
+      <thead><tr><th>${sms ? 'Teléfono' : 'Email'}</th><th>Hora</th><th>Estado</th>${sms ? '<th>Mensaje</th>' : ''}</tr></thead>
+      <tbody>${filas.slice(0, 1000).map(d => {
+        const [txt, color] = ESTADO_DEST[d.estado] || [d.estado || '?', 'secondary'];
+        return `<tr><td>${esc(d.destino)}</td><td style="white-space:nowrap;">${fecha(d.fecha).slice(11)}</td>
+          <td><span class="badge badge-${color}">${esc(txt)}</span>${d.error ? `<div class="he-dest-error">${esc(d.error)}</div>` : ''}</td>
+          ${sms ? `<td>${esc(d.mensaje)}</td>` : ''}</tr>`;
+      }).join('')}</tbody></table>${filas.length > 1000 ? '<p class="text-muted" style="font-size:0.78rem;">Se muestran 1.000: busca o descarga el CSV para ver el resto.</p>' : ''}`
+      : '<div class="he-vacio"><i class="fas fa-inbox"></i><p>Sin resultados.</p></div>';
+  }
+  $('dBuscar').addEventListener('input', pintarDest);
+  $('dEstado').addEventListener('change', pintarDest);
+
+  // ========== MODALES Y FILTROS ==========
+  function cerrar(id) { $(id).classList.remove('active'); }
+  document.querySelectorAll('[data-cerrar]').forEach(b => b.addEventListener('click', () => cerrar(b.dataset.cerrar)));
+  ['verModal', 'destModal'].forEach(id => $(id).addEventListener('click', e => { if (e.target.id === id) cerrar(id); }));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { cerrar('verModal'); cerrar('destModal'); } });
+
+  $('fDesde').value = hoyColombia(6);
+  $('fHasta').value = hoyColombia(0);
+  // Fechas, canal y destino se consultan en BigQuery; origen y búsqueda filtran lo ya cargado.
+  ['fDesde', 'fHasta', 'fCanal'].forEach(id => $(id).addEventListener('change', cargar));
+  $('fDestino').addEventListener('keydown', e => { if (e.key === 'Enter') cargar(); });
+  $('btnBuscar').addEventListener('click', cargar);
+  $('fOrigen').addEventListener('change', pintar);
+  $('fBuscar').addEventListener('input', pintar);
+
+  cargar();
+})();
+</script>
+{% endblock %}

@@ -11,11 +11,36 @@ from datos_personales import enmascarar_email
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.esmsv.com/v1"
+# La API a veces tarda más de 30 s en crear o enviar una campaña: con menos
+# espera la campaña quedaba creada en borrador y nunca salía.
+TIMEOUT_CAMPANA = 120
 
 
 class EmailClientError(Exception):
     """Error personalizado para el cliente de Email."""
     pass
+
+
+# Códigos de error de la API que se ven en pantalla: qué pasó y qué hacer.
+ERRORES_API = {
+    "errorMsg_senderDomainNotVerified": (
+        "El dominio del remitente (email.from_email en config.json) no está verificado en esta cuenta de "
+        "email. Use un remitente de un dominio verificado en la cuenta (por ejemplo comercial@valoro.com.co) "
+        "o verifique el dominio en la plataforma."),
+    "errorMsg_campaignNotFound": "La campaña no existe en la cuenta de email configurada (revise email.api_key).",
+}
+
+
+def _error_api(codigo) -> str:
+    """Texto del error de la API: la explicación si se conoce el código, si no el código tal cual."""
+    for clave, texto in ERRORES_API.items():
+        if clave in str(codigo):
+            return f"{texto} ({clave})"
+    return str(codigo)
+
+
+class EmailTimeoutError(EmailClientError):
+    """La API no respondió a tiempo: la operación pudo quedar hecha o no."""
 
 
 class EmailClient:
@@ -60,7 +85,7 @@ class EmailClient:
                 if result.get("code") == "errorMsg_contactAlreadyExist":
                     logger.warning(f"⚠️ Contacto ya existe: {enmascarar_email(email)}")
                     return {"success": True, "data": {"email": email}, "ya_existe": True}
-                raise EmailClientError(result.get("code", "Error desconocido"))
+                raise EmailClientError(_error_api(result.get("code", "Error desconocido")))
             return {"success": False, "error": result}
         
         except requests.exceptions.RequestException as e:
@@ -90,7 +115,7 @@ class EmailClient:
             
             if result.get("status") == "ok":
                 return {"success": True, "data": result.get("data", {})}
-            raise EmailClientError(result.get("code", "Error desconocido"))
+            raise EmailClientError(_error_api(result.get("code", "Error desconocido")))
         
         except requests.exceptions.RequestException as e:
             raise EmailClientError(f"Error de red: {e}")
@@ -111,7 +136,7 @@ class EmailClient:
             
             if result.get("status") == "ok":
                 return {"success": True, "data": result}
-            raise EmailClientError(result.get("code", "Error desconocido"))
+            raise EmailClientError(_error_api(result.get("code", "Error desconocido")))
         
         except requests.exceptions.RequestException as e:
             raise EmailClientError(f"Error de red: {e}")
@@ -138,7 +163,7 @@ class EmailClient:
                 if result.get("code", {}).get("name", [""])[0] == "is_used":
                     logger.warning(f"⚠️ Lista ya existe: {nombre}")
                     return {"success": True, "data": {"name": nombre}, "ya_existe": True}
-                raise EmailClientError(str(result.get("code", "Error")))
+                raise EmailClientError(_error_api(result.get("code", "Error")))
             return {"success": False, "error": result}
         
         except requests.exceptions.RequestException as e:
@@ -161,7 +186,7 @@ class EmailClient:
             
             if result.get("status") == "ok":
                 return {"success": True, "data": result}
-            raise EmailClientError(result.get("code", "Error"))
+            raise EmailClientError(_error_api(result.get("code", "Error")))
         
         except requests.exceptions.RequestException as e:
             raise EmailClientError(f"Error de red: {e}")
@@ -184,36 +209,46 @@ class EmailClient:
                 data[key] = value
         
         try:
-            resp = self.session.post(url, data=data, timeout=30)
+            resp = self.session.post(url, data=data, timeout=TIMEOUT_CAMPANA)
             result = resp.json()
-            
+
             if result.get("status") == "ok":
                 logger.info(f"✅ Campaña creada: ID {result.get('data', {}).get('id')}")
                 return {"success": True, "data": result.get("data", {})}
-            raise EmailClientError(result.get("code", "Error"))
-        
+            raise EmailClientError(_error_api(result.get("code", "Error")))
+
+        except requests.exceptions.Timeout as e:
+            raise EmailTimeoutError(f"La API de email no respondió a tiempo creando la campaña: {e}")
         except requests.exceptions.RequestException as e:
             raise EmailClientError(f"Error de red: {e}")
 
     def enviar_campana(self, campana_id: int, send_now: int = 1, send_date: Optional[str] = None) -> Dict:
-    
+
         url = f"{BASE_URL}/campaign/send"
         data = {"id": campana_id, "sendNow": send_now}
-        
+
         if send_now == 0 and send_date:
             data["sendDate"] = send_date
-        
+
         try:
-            resp = self.session.post(url, data=data, timeout=30)
+            resp = self.session.post(url, data=data, timeout=TIMEOUT_CAMPANA)
             result = resp.json()
-            
+
             if result.get("status") == "ok":
-                logger.info(f"✅ Campaña {campana_id} enviada")
+                logger.info(f"✅ Campaña {campana_id}: la API aceptó el envío")
                 return {"success": True, "data": result.get("data", {})}
-            raise EmailClientError(str(result.get("code", "Error")))
-        
+            raise EmailClientError(_error_api(result.get("code", "Error")))
+
+        except requests.exceptions.Timeout as e:
+            raise EmailTimeoutError(f"La API de email no respondió a tiempo enviando la campaña {campana_id}: {e}")
         except requests.exceptions.RequestException as e:
             raise EmailClientError(f"Error de red: {e}")
+
+    def buscar_campana_por_nombre(self, nombre: str) -> Optional[Dict]:
+        """La campaña más reciente con ese nombre exacto (o None)."""
+        resultado = self.obtener_campanas(filtro=nombre, limit=20)
+        campanas = [c for c in resultado.get("data", {}).get("data", []) if c.get("name") == nombre]
+        return max(campanas, key=lambda c: c.get("id") or 0) if campanas else None
 
     def obtener_campanas(self, filtro: Optional[str] = None, status: Optional[str] = None,
                          limit: int = 100, page: int = 1) -> Dict:
@@ -235,7 +270,7 @@ class EmailClient:
             
             if result.get("status") == "ok":
                 return {"success": True, "data": result.get("data", {})}
-            raise EmailClientError(result.get("code", "Error"))
+            raise EmailClientError(_error_api(result.get("code", "Error")))
         
         except requests.exceptions.RequestException as e:
             raise EmailClientError(f"Error de red: {e}")
@@ -246,14 +281,14 @@ class EmailClient:
         GET /v1/campaign/:campaign_id
         """
         url = f"{BASE_URL}/campaign/{campana_id}"
-        
+
         try:
-            resp = self.session.get(url, timeout=30)
+            resp = self.session.get(url, timeout=60)
             result = resp.json()
             
             if result.get("status") == "ok":
                 return {"success": True, "data": result.get("data", {})}
-            raise EmailClientError(result.get("code", "Error"))
+            raise EmailClientError(_error_api(result.get("code", "Error")))
         
         except requests.exceptions.RequestException as e:
             raise EmailClientError(f"Error de red: {e}")
@@ -272,7 +307,7 @@ class EmailClient:
             
             if result.get("status") == "ok":
                 return {"success": True, "data": result}
-            raise EmailClientError(result.get("code", "Error"))
+            raise EmailClientError(_error_api(result.get("code", "Error")))
         
         except requests.exceptions.RequestException as e:
             raise EmailClientError(f"Error de red: {e}")
@@ -291,7 +326,7 @@ class EmailClient:
             
             if result.get("status") == "ok":
                 return {"success": True, "html": result.get("html", "")}
-            raise EmailClientError(result.get("code", "Error"))
+            raise EmailClientError(_error_api(result.get("code", "Error")))
         
         except requests.exceptions.RequestException as e:
             raise EmailClientError(f"Error de red: {e}")
@@ -310,7 +345,7 @@ class EmailClient:
             
             if result.get("status") == "ok":
                 return {"success": True, "data": result.get("data", {}).get("data", [])}
-            raise EmailClientError(str(result.get("code", "Error")))
+            raise EmailClientError(_error_api(result.get("code", "Error")))
         
         except requests.exceptions.RequestException as e:
             raise EmailClientError(f"Error de red: {e}")       
@@ -338,7 +373,7 @@ class EmailClient:
                 if "is_used" in str(result.get("code", "")):
                     logger.warning(f"⚠️ El campo '{nombre}' ya existe")
                     return {"success": True, "ya_existe": True}
-                raise EmailClientError(str(result.get("code", "Error")))
+                raise EmailClientError(_error_api(result.get("code", "Error")))
             return {"success": False, "error": result}
         
         except requests.exceptions.RequestException as e:

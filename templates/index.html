@@ -44,6 +44,25 @@
 
   .inicio-avisos { margin-bottom: 18px; }
 
+  /* Saldo y consumo */
+  .inicio-saldo { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .cifra .cifra-valor.chico { font-size: 1.5rem; }
+  .cifra.alerta { border-color: var(--danger); }
+  .cifra.alerta .cifra-valor { color: var(--danger); }
+
+  /* Turnos de cada programación (ej. recurrente cada 2 h) */
+  .turnos { display: flex; flex-wrap: wrap; gap: 4px; max-width: 420px; }
+  .turno {
+    display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 10px;
+    font-size: 0.72rem; font-weight: 600; white-space: nowrap; cursor: default; border: 1px solid transparent;
+  }
+  .turno.enviado { background: #e3f4dc; color: #1e5a12; border-color: #b9e0a8; }
+  .turno.sin_datos { background: #f1f1f1; color: #555; border-color: #ddd; }
+  .turno.error { background: #fde3e1; color: #a3231a; border-color: #f5b5ae; }
+  .turno.no_corrio { background: #fff3cd; color: #7a5a00; border-color: #f3d97a; }
+  .turno.pendiente { background: transparent; color: var(--text-secondary); border-color: var(--border); }
+  .turno-detalle { font-size: 0.72rem; color: var(--text-secondary); margin-top: 3px; }
+
   .estado-hoy { white-space: nowrap; }
   .fila-error { font-size: 0.74rem; color: var(--danger); max-width: 360px; white-space: normal; word-break: break-word; }
   .canal { font-weight: 700; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -106,7 +125,31 @@
   </div>
 </div>
 
+<div class="inicio-cifras inicio-saldo">
+  <div class="cifra" id="cifraSaldo">
+    <div class="cifra-etiqueta"><i class="fas fa-wallet"></i> Saldo Infobip (SMS)</div>
+    <div class="cifra-valor chico" id="saldoSms">—</div>
+    <div class="cifra-nota" id="saldoNota">cargando...</div>
+  </div>
+  <div class="cifra">
+    <div class="cifra-etiqueta"><i class="fas fa-coins"></i> Consumido SMS hoy</div>
+    <div class="cifra-valor chico" id="consumoHoy">—</div>
+    <div class="cifra-nota" id="consumoHoyNota">Infobip Valoro</div>
+  </div>
+  <div class="cifra">
+    <div class="cifra-etiqueta"><i class="fas fa-calendar-alt"></i> Consumido SMS este mes</div>
+    <div class="cifra-valor chico" id="consumoMes">—</div>
+    <div class="cifra-nota" id="consumoMesNota">Infobip Valoro</div>
+  </div>
+  <div class="cifra">
+    <div class="cifra-etiqueta"><i class="fas fa-envelope-open-text"></i> Emails este mes</div>
+    <div class="cifra-valor chico" id="emailsMes">—</div>
+    <div class="cifra-nota" id="emailsMesNota">EmailLog · la plataforma de email no da el saldo por API</div>
+  </div>
+</div>
+
 <div class="inicio-avisos" id="avisos"></div>
+<div class="inicio-avisos" id="avisosSaldo"></div>
 
 <div class="card">
   <div class="card-header">
@@ -116,7 +159,7 @@
   <div class="table-responsive">
     <table class="table">
       <thead>
-        <tr><th>Canal</th><th>Campaña</th><th>Tipo</th><th>Hora</th><th>Hoy</th><th>Corrió a las</th><th style="text-align:right;">Mensajes</th></tr>
+        <tr><th>Canal</th><th>Campaña</th><th>Tipo</th><th>Hora</th><th>Hoy</th><th>Turnos de hoy</th><th style="text-align:right;">Mensajes</th></tr>
       </thead>
       <tbody id="tablaProgramaciones">
         <tr><td colspan="7" class="text-muted">Cargando...</td></tr>
@@ -169,6 +212,73 @@ function numero(valor) {
   return valor === null || valor === undefined ? '—' : Number(valor).toLocaleString('es-CO');
 }
 
+function pesos(valor) {
+  return valor === null || valor === undefined ? '—' : '$' + Math.round(valor).toLocaleString('es-CO');
+}
+
+// Cada turno del día: enviado (con cuántos), sin datos, error, no corrió o pendiente.
+const TURNO = {
+  enviado: ['fa-check', t => `${numero(t.enviados)} env.`],
+  sin_datos: ['fa-inbox', () => 'sin datos'],
+  error: ['fa-times', () => 'error'],
+  no_corrio: ['fa-exclamation-triangle', () => 'no corrió'],
+  pendiente: ['fa-clock', () => 'pendiente'],
+};
+
+function detalleTurno(t) {
+  const partes = [];
+  if (t.a_las) partes.push(`Corrió a las ${t.a_las}`);
+  if (t.filas_consulta !== null && t.filas_consulta !== undefined) partes.push(`la consulta trajo ${numero(t.filas_consulta)} filas`);
+  if (t.enviados !== null && t.enviados !== undefined) partes.push(`${numero(t.enviados)} enviados`);
+  if (t.excluidos) partes.push(`${numero(t.excluidos)} excluidos (lista negra / ya enviados hoy)`);
+  if (t.resultado === 'no_corrio') partes.push('No hay registro de que se ejecutara (¿app apagada o programación con error?)');
+  if (t.resultado === 'pendiente') partes.push('Todavía no llega su hora');
+  if (t.mensaje) partes.push(t.mensaje);
+  return partes.join(' · ');
+}
+
+function htmlTurnos(p) {
+  const turnos = p.turnos || [];
+  if (!turnos.length) return escapeHtml(p.corrio_a_las) || '—';
+  const chips = turnos.map(t => {
+    const [icono, texto] = TURNO[t.resultado] || ['fa-question', () => t.resultado];
+    return `<span class="turno ${escapeHtml(t.resultado)}" title="${escapeHtml(detalleTurno(t))}">
+      <i class="fas ${icono}"></i> ${escapeHtml(t.turno || t.a_las)} · ${escapeHtml(texto(t))}</span>`;
+  }).join('');
+  // El último turno que ya corrió, en texto (sin tener que pasar el mouse).
+  const ultimo = [...turnos].reverse().find(t => t.a_las);
+  return `<div class="turnos">${chips}</div>` +
+    (ultimo ? `<div class="turno-detalle">Último (${escapeHtml(ultimo.turno || ultimo.a_las)}): ${escapeHtml(detalleTurno(ultimo))}</div>` : '');
+}
+
+// Saldo de Infobip y lo consumido (/api/inicio/saldo).
+function cargarSaldo() {
+  fetch('/api/inicio/saldo')
+    .then(r => r.json())
+    .then(data => {
+      const sms = data.sms || {}, email = data.email || {};
+      document.getElementById('saldoSms').textContent = sms.saldo === null ? '—' : `${pesos(sms.saldo)} ${sms.moneda || ''}`;
+      document.getElementById('saldoNota').textContent = sms.alcanza_dias === null ? 'saldo actual de la cuenta'
+        : sms.alcanza_dias < 1 ? 'alcanza para menos de 1 día al consumo promedio del mes'
+        : `alcanza para ~${numero(sms.alcanza_dias)} días al consumo promedio del mes`;
+      // Menos de 3 días de saldo: en rojo.
+      document.getElementById('cifraSaldo').classList.toggle('alerta', sms.alcanza_dias !== null && sms.alcanza_dias < 3);
+      document.getElementById('consumoHoy').textContent = pesos(sms.costo_hoy);
+      document.getElementById('consumoHoyNota').textContent = `${numero(sms.sms_hoy)} SMS hoy (cuenta Infobip de Valoro, se actualiza cada 5 min)`;
+      document.getElementById('consumoMes').textContent = pesos(sms.costo_mes);
+      document.getElementById('consumoMesNota').textContent = `${numero(sms.sms_mes)} SMS en el mes`;
+      document.getElementById('emailsMes').textContent = numero(email.enviados_mes);
+      document.getElementById('emailsMesNota').textContent =
+        `${numero(email.enviados_hoy)} hoy · EmailLog (la plataforma de email no da el saldo por API)`;
+      document.getElementById('avisosSaldo').innerHTML = (data.avisos || []).map(a =>
+        `<div class="alert alert-warning"><i class="fas fa-exclamation-circle"></i> ${escapeHtml(a)}</div>`).join('');
+    })
+    .catch(() => {
+      document.getElementById('avisosSaldo').innerHTML =
+        '<div class="alert alert-warning"><i class="fas fa-exclamation-circle"></i> No se pudo cargar el saldo.</div>';
+    });
+}
+
 // Lo enviado hoy (/api/inicio/resumen). Si BigQuery falla, se ve lo de SQLite y el error.
 function cargarResumen() {
   fetch('/api/inicio/resumen')
@@ -199,7 +309,7 @@ function cargarResumen() {
           <td>${p.tipo === 'recurrente' ? 'Recurrente' : 'Simple'}</td>
           <td>${escapeHtml(p.hora) || '—'}</td>
           <td>${ESTADO_HOY[p.estado_hoy] || escapeHtml(p.estado_hoy)}</td>
-          <td>${escapeHtml(p.corrio_a_las) || '—'}</td>
+          <td>${htmlTurnos(p)}</td>
           <td style="text-align:right;">${numero(p.mensajes)}</td>
         </tr>`).join('') : '<tr><td colspan="7" class="text-muted">No hay programaciones para hoy.</td></tr>';
 
@@ -242,8 +352,10 @@ function cargarLogs() {
 }
 
 cargarResumen();
+cargarSaldo();
 cargarLogs();
 setInterval(cargarLogs, 5000);
 setInterval(cargarResumen, 60000);
+setInterval(cargarSaldo, 300000);
 </script>
 {% endblock %}

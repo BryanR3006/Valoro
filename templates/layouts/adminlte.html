@@ -56,6 +56,12 @@
             <a href="/" class="sidebar-link {% if ep == 'index' %}active{% endif %}">
                 <i class="fas fa-home nav-icon"></i> Inicio
             </a>
+            <a href="/programaciones" class="sidebar-link {% if ep == 'programaciones_pagina' %}active{% endif %}">
+                <i class="fas fa-clock-rotate-left nav-icon"></i> Programaciones
+            </a>
+            <a href="/envios" class="sidebar-link {% if ep == 'envios_pagina' %}active{% endif %}">
+                <i class="fas fa-paper-plane nav-icon"></i> Envíos
+            </a>
             {% for g in menu %}
             {% set abierto = ns.grupo and ns.grupo['id'] == g['id'] %}
             <div class="sidebar-group {% if abierto %}open{% endif %}" data-grupo="{{ g['id'] }}" {% if abierto %}data-actual="1"{% endif %}>
@@ -92,7 +98,9 @@
                     <span class="nav-ruta">{{ ns.grupo['titulo'] }}</span>
                     <i class="fas fa-chevron-right nav-ruta-sep"></i>
                     {{ ns.item['texto'] }}
-                    {%- elif ep == 'index' -%}Inicio{%- else -%}{{ app_nombre }}{%- endif -%}
+                    {%- elif ep == 'index' -%}Inicio
+                    {%- elif ep == 'programaciones_pagina' -%}Programaciones
+                    {%- elif ep == 'envios_pagina' -%}Envíos{%- else -%}{{ app_nombre }}{%- endif -%}
                 {% endblock %}</span>
             </div>
         </nav>
@@ -212,6 +220,7 @@
     });
 })();
 </script>
+<script src="{{ url_for('static', filename='js/horarios.js') }}"></script>
 {% block extra_js %}{% endblock %}
 </body>
 </html>

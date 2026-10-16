@@ -2,11 +2,14 @@
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 import pandas as pd
+
+from services.email_client import EmailTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -275,6 +278,10 @@ class ErrorListaNegraEmail(EmailServiceError):
     """No se pudo consultar la lista negra de emails: el envío se cancela."""
 
 
+class SinDestinatariosEmail(EmailServiceError):
+    """La consulta no trajo registros o los filtros quitaron a todos: no se envía, pero no es una falla."""
+
+
 def hoy_colombia() -> str:
     """Fecha de hoy en Colombia (AAAA-MM-DD). En UTC, después de las 7 p. m. ya es mañana."""
     import pytz
@@ -327,6 +334,8 @@ def filtrar_destinatarios(client_bq, rows: List[Dict], confirmar_reenvio: bool =
     Si la lista negra no carga lanza ErrorListaNegraEmail: no se envía.
     """
     from google.cloud import bigquery
+    if not rows:
+        raise SinDestinatariosEmail("La consulta no trajo registros: no se envió nada.")
     email_column = detectar_columna_email(rows)
     todos = [str(r.get(email_column) or "").strip().lower() for r in rows]
     validos = sorted({e for e in todos if "@" in e})
@@ -393,6 +402,69 @@ def _crear_contacto(client, email: str, campos: Dict[int, str]) -> Optional[int]
     raise EmailServiceError("No se pudo recrear el contacto")
 
 
+def _crear_campana(client, datos: Dict, lista_id) -> int:
+    """
+    Crea la campaña y devuelve su ID. Si la API no responde a tiempo, la
+    campaña pudo quedar creada: se busca por nombre y por la lista de este
+    envío para no dejarla en borrador.
+    """
+    try:
+        resultado = client.crear_campana(datos)
+    except EmailTimeoutError as exc:
+        logger.warning(f"⚠️ {exc}. Se busca si la campaña quedó creada.")
+        time.sleep(5)
+        encontrada = client.buscar_campana_por_nombre(datos["name"])
+        if encontrada:
+            detalle = client.detalle_campana(encontrada["id"]).get("data", {})
+            if lista_id in [m.get("id") for m in detalle.get("maillists") or []]:
+                logger.info(f"✅ La campaña sí quedó creada: ID {encontrada['id']}")
+                return encontrada["id"]
+        raise EmailServiceError(
+            "La API de email no respondió a tiempo y la campaña no quedó creada: no se envió nada. "
+            "Intente de nuevo en unos minutos.") from exc
+    if not resultado.get("success") or not resultado.get("data", {}).get("id"):
+        raise EmailServiceError("No se pudo crear la campaña")
+    return resultado["data"]["id"]
+
+
+def verificar_campana_enviada(client, campana_id, intentos: int = 6, espera: int = 5) -> Dict:
+    """
+    Confirma en la cuenta de email que la campaña salió: que exista, que ya no
+    esté en borrador (Draft) y que tenga destinatarios. La API responde "ok" al
+    enviar aunque la campaña no salga, por eso se revisa. Lanza EmailServiceError
+    si no salió. Devuelve {"status", "recipients_count"}.
+    """
+    from services.email_client import EmailClientError
+    detalle = {}
+    for intento in range(intentos):
+        try:
+            detalle = client.detalle_campana(campana_id).get("data", {})
+        except EmailClientError as exc:
+            if "NotFound" in str(exc):
+                raise EmailServiceError(
+                    f"La campaña {campana_id} no existe en la cuenta de email configurada: revise "
+                    f"email.api_key en config.json. No se envió nada.") from exc
+            logger.warning(f"⚠️ No se pudo leer el estado de la campaña {campana_id}: {exc}")
+        if detalle.get("status") and detalle["status"] != "Draft":
+            break
+        if intento < intentos - 1:
+            time.sleep(espera)
+    status = detalle.get("status") or "desconocido"
+    destinatarios = int(detalle.get("recipients_count") or 0)
+    logger.info(f"📧 Campaña {campana_id}: estado {status}, {destinatarios} destinatarios")
+    if status == "Draft":
+        raise EmailServiceError(
+            f"La campaña {campana_id} quedó en borrador (Draft) en la plataforma de email: no se envió. "
+            "Revísela allá o intente de nuevo.")
+    if status == "desconocido":
+        raise EmailServiceError(
+            f"No se pudo confirmar que la campaña {campana_id} salió (la API de email no respondió). "
+            "Revise en la plataforma antes de reintentar, para no duplicar.")
+    if not destinatarios and status == "Completed":
+        raise EmailServiceError(f"La campaña {campana_id} terminó (Completed) sin destinatarios: no llegó a nadie.")
+    return {"status": status, "recipients_count": destinatarios}
+
+
 def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: str, campana: str,
                          usuario: str, reply_email: str, confirmar_reenvio: bool,
                          email_config: Dict, email_client=None) -> Dict:
@@ -415,7 +487,7 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
     filtro = filtrar_destinatarios(client_bq, rows, confirmar_reenvio)
     destinatarios, email_column = filtro["rows"], filtro["email_column"]
     if not destinatarios:
-        raise EmailServiceError(
+        raise SinDestinatariosEmail(
             f"No hay destinatarios después de los filtros (lista negra: {filtro['blacklist']}, "
             f"duplicados de hoy: {filtro['duplicados']}, inválidos: {filtro['invalidos']}).")
 
@@ -459,7 +531,7 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
     client.suscribir_contactos(contact_ids, lista_id)
 
     nombre_campana = campana or f"Email {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-    resultado = client.crear_campana({
+    datos_campana = {
         "name": nombre_campana,
         "subject": traducir_a_member(asunto, mapeo) if asunto else "Sin asunto",
         "fromAlias": email_config.get("from_alias") or "Valoro",
@@ -467,12 +539,15 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
         "replyEmail": reply_email or from_email,
         "content": traducir_a_member(plantilla, mapeo),
         "mailListsIds": [lista_id],
-    })
-    if not resultado.get("success"):
-        raise EmailServiceError("No se pudo crear la campaña")
-    campana_id = resultado["data"]["id"]
-    if not client.enviar_campana(campana_id, send_now=1).get("success"):
-        raise EmailServiceError("No se pudo enviar la campaña")
+    }
+    campana_id = _crear_campana(client, datos_campana, lista_id)
+    try:
+        if not client.enviar_campana(campana_id, send_now=1).get("success"):
+            raise EmailServiceError("No se pudo enviar la campaña")
+    except EmailTimeoutError as exc:
+        # Pudo salir igual: lo dice el estado de la campaña (abajo).
+        logger.warning(f"⚠️ {exc}. Se revisa el estado de la campaña.")
+    estado = verificar_campana_enviada(client, campana_id)
 
     ahora = datetime.now(timezone.utc).isoformat()
     primera = enviados[0]
@@ -497,6 +572,8 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
 
     return {
         "campana_id": campana_id,
+        "estado_campana": estado["status"],
+        "destinatarios_campana": estado["recipients_count"],
         "enviados": len(enviados),
         "fallidos": len(errores),
         "errores": errores[:10],
