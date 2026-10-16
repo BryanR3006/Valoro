@@ -1371,7 +1371,9 @@ def email_validar():
             return error_response
 
         try:
-            filtro = filtrar_destinatarios(bq_client, rows, confirmar_reenvio)
+            from services.email_service import senuelos_email
+            filtro = filtrar_destinatarios(bq_client, rows, confirmar_reenvio,
+                                           senuelos_email(load_config().get("email", {})))
         except EmailServiceError as exc:
             return jsonify({"success": False, "message": str(exc)}), 400
         validacion = {k: v for k, v in filtro.items() if k != "rows"}

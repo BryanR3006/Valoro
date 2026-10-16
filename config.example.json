@@ -6,7 +6,8 @@
   "email": {
     "api_key": "",
     "from_email": "",
-    "from_alias": ""
+    "from_alias": "",
+    "senuelos": []
   },
   "infobip": {
     "api_key": "",

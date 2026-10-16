@@ -327,11 +327,55 @@ def _emails_en_tabla(client_bq, sql: str, emails: List[str], extra_params=None) 
     return {str(r["email"]).strip().lower() for r in client_bq.query(sql, job_config=config).result()}
 
 
-def filtrar_destinatarios(client_bq, rows: List[Dict], confirmar_reenvio: bool = False) -> Dict:
+# Columnas de la consulta que llevan el nombre del cliente: en la fila de un señuelo
+# van con el nombre del señuelo.
+COLUMNAS_NOMBRE = ("nombre", "customer_name", "nombre_cliente", "nombre_completo", "name")
+
+
+def senuelos_email(email_config: Dict) -> List[Dict]:
+    """
+    Señuelos de email de config.json, sección email:
+    "senuelos": [{"email": "...", "nombre": "..."}]. Reciben cada envío de email
+    para comprobar que sale bien, como los señuelos de SMS. Van en config.json
+    (no en git) porque son datos personales.
+    """
+    lista, vistos = [], set()
+    for s in (email_config or {}).get("senuelos") or []:
+        if not isinstance(s, dict):
+            continue
+        correo = str(s.get("email") or "").strip().lower()
+        if "@" in correo and correo not in vistos:
+            vistos.add(correo)
+            lista.append({"email": correo, "nombre": str(s.get("nombre") or "").strip()})
+    return lista
+
+
+def filas_senuelos(base: Dict, email_column: str, senuelos: List[Dict]) -> List[Dict]:
+    """
+    Una fila por señuelo, copiada de la fila base (un cliente real, para que las
+    variables de la plantilla tengan datos), con el email y el nombre del señuelo.
+    """
+    columnas_nombre = {_clave_variable(c) for c in COLUMNAS_NOMBRE}
+    filas = []
+    for s in senuelos:
+        fila = dict(base)
+        fila[email_column] = s["email"]
+        if s["nombre"]:
+            for columna in fila:
+                if _clave_variable(columna) in columnas_nombre:
+                    fila[columna] = s["nombre"]
+        filas.append(fila)
+    return filas
+
+
+def filtrar_destinatarios(client_bq, rows: List[Dict], confirmar_reenvio: bool = False,
+                          senuelos: Optional[List[Dict]] = None) -> Dict:
     """
     Quita correos inválidos, lista negra (Email_Tutela) y, salvo confirmar_reenvio,
     los ya enviados hoy (EmailLog, fecha de Colombia).
     Si la lista negra no carga lanza ErrorListaNegraEmail: no se envía.
+    Señuelos (senuelos_email): si queda algún cliente, se agregan al final y nunca
+    se excluyen (lista negra ni duplicados), como en SMS. Sin clientes no se les envía.
     """
     from google.cloud import bigquery
     if not rows:
@@ -369,6 +413,14 @@ def filtrar_destinatarios(client_bq, rows: List[Dict], confirmar_reenvio: bool =
         vistos.add(email)
         a_enviar.append(row)
 
+    # Señuelos: solo si hay clientes; si un señuelo vino en la consulta, va una sola vez.
+    correos_senuelo = {s["email"] for s in senuelos or []}
+    n_senuelos = 0
+    clientes = [r for r in a_enviar if str(r.get(email_column) or "").strip().lower() not in correos_senuelo]
+    if clientes and senuelos:
+        a_enviar = clientes + filas_senuelos(clientes[0], email_column, senuelos)
+        n_senuelos = len(senuelos)
+
     return {
         "email_column": email_column,
         "rows": a_enviar,
@@ -378,6 +430,7 @@ def filtrar_destinatarios(client_bq, rows: List[Dict], confirmar_reenvio: bool =
         "blacklist": len(blacklist),
         "duplicados": len(duplicados & set(validos)),
         "a_enviar": len(a_enviar),
+        "senuelos": n_senuelos,
     }
 
 
@@ -484,7 +537,7 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
     if not plantilla:
         raise EmailServiceError("La plantilla (HTML) es obligatoria.")
 
-    filtro = filtrar_destinatarios(client_bq, rows, confirmar_reenvio)
+    filtro = filtrar_destinatarios(client_bq, rows, confirmar_reenvio, senuelos_email(email_config))
     destinatarios, email_column = filtro["rows"], filtro["email_column"]
     if not destinatarios:
         raise SinDestinatariosEmail(
