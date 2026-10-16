@@ -1302,7 +1302,14 @@
   // Event listeners
   document.getElementById('histFiltrarBtn').addEventListener('click', loadHistory);
   plantillaEl.addEventListener('input', updateCharCounter);
-  cargarPlantillas();
+  // ?plantilla=ID (botón "Usar" de la galería de plantillas): queda elegida y cargada.
+  const plantillaUrl = new URLSearchParams(location.search).get('plantilla');
+  cargarPlantillas().then(() => {
+    if (plantillaUrl && plantillasGuardadas.some(p => String(p.id) === plantillaUrl)) {
+      plantillaSelEl.value = plantillaUrl;
+      plantillaSelEl.dispatchEvent(new Event('change'));
+    }
+  });
   
   // Inicialización
   updateCharCounter();

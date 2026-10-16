@@ -2121,6 +2121,14 @@ def programaciones_pagina():
     return render_template("programaciones.html")
 
 
+# ==================== GALERÍA DE PLANTILLAS ====================
+
+@app.route("/plantillas")
+def plantillas_galeria():
+    """Galería para ver todas las plantillas de email y SMS (se editan en /email/plantillas y /config-mensajes)."""
+    return render_template("plantillas.html")
+
+
 # ==================== HISTORIAL DE ENVÍOS ====================
 # Todo lo enviado (SMS y email, manual o programado), un envío por fila. Las
 # consultas están en historial_envios.py.
@@ -2861,5 +2869,5 @@ if __name__ == "__main__":
     # arrancar corría dos veces. Tras editar un .py hay que reiniciar a mano.
     # Puerto configurable con la variable de entorno PORT (por defecto 5000),
     # para poder correr una copia de prueba sin chocar con la aplicación real.
-    app.run(debug=False, use_reloader=False, host="0.0.0.0",
+    app.run(debug=True, use_reloader=False, host="0.0.0.0",
             port=int(os.environ.get("PORT", "3001")))

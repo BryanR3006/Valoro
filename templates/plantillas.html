@@ -1,0 +1,304 @@
+{% extends "layouts/adminlte.html" %}
+{# Galería de plantillas: todas las de email (miniatura del correo) y SMS (como se ve en
+   el celular), para verlas. Se editan en /email/plantillas y /config-mensajes. Datos de
+   /api/email/plantillas?todas=1 y /api/sms/mensajes. #}
+
+{% block title %}Plantillas{% endblock %}
+
+{% block page_title %}<h1>Galería de plantillas</h1>{% endblock %}
+{% block page_subtitle %}Todas las plantillas de email y SMS para verlas como le llegan al cliente.{% endblock %}
+
+{% block extra_css %}
+<style>
+  .gp-barra { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 18px; }
+  .gp-tabs { display: flex; gap: 2px; background: var(--border-light); border-radius: 10px; padding: 4px; }
+  .gp-tabs button {
+    border: 0; background: transparent; border-radius: 8px; padding: 8px 18px; font-weight: 600;
+    font-size: 0.84rem; color: var(--text-secondary); cursor: pointer;
+  }
+  .gp-tabs button.activo { background: var(--bg-card); color: var(--primary); box-shadow: var(--shadow-sm); }
+  .gp-tabs .num { font-size: 0.72rem; opacity: 0.75; margin-left: 4px; }
+  .gp-barra input, .gp-barra select {
+    border: 1.5px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: 0.82rem;
+    background: #fff; color: var(--text-primary); height: 36px;
+  }
+  .gp-barra input[type="search"] { min-width: 240px; flex: 1; max-width: 380px; }
+  .gp-barra label { font-size: 0.82rem; color: var(--text-secondary); display: flex; gap: 6px; align-items: center; margin: 0; }
+  .gp-barra .der { margin-left: auto; display: flex; gap: 8px; }
+
+  .gp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }
+  .gp-card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; transition: var(--transition);
+  }
+  .gp-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+  .gp-card.inactiva { opacity: 0.6; }
+  .gp-mini { position: relative; height: 340px; overflow: hidden; background: #fff; cursor: zoom-in; border-bottom: 1px solid var(--border); }
+  /* Miniatura: el correo a 600 px de ancho, escalado al ancho de la tarjeta; no recibe clics. */
+  .gp-mini iframe { border: 0; width: 600px; height: 1600px; transform-origin: 0 0; pointer-events: none; display: block; }
+  .gp-mini::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 50px;
+    background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0.95));
+  }
+  .gp-info { padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .gp-info strong { font-size: 0.9rem; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gp-info .asunto { font-size: 0.8rem; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gp-info .meta { font-size: 0.72rem; color: var(--text-muted); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .gp-acciones { padding: 10px 14px; border-top: 1px solid var(--border-light); display: flex; gap: 6px; justify-content: flex-end; }
+  .gp-acciones .btn { padding: 4px 10px; font-size: 0.78rem; }
+
+  /* SMS: burbuja como en el celular */
+  .gp-celular { background: #eef1ec; padding: 18px 16px; min-height: 180px; cursor: zoom-in; border-bottom: 1px solid var(--border); }
+  .gp-remitente { font-size: 0.7rem; color: var(--text-muted); text-align: center; margin-bottom: 10px; }
+  .gp-burbuja {
+    background: #fff; border-radius: 16px 16px 16px 4px; padding: 10px 13px; font-size: 0.84rem;
+    color: #1f2a22; box-shadow: 0 1px 2px rgba(0,0,0,0.08); white-space: pre-wrap; word-break: break-word; max-width: 92%;
+  }
+  .gp-burbuja .var { background: #e7f5d6; color: #2f5d12; border-radius: 4px; padding: 0 3px; font-weight: 600; }
+  .gp-largo { font-size: 0.7rem; color: var(--text-muted); margin-top: 6px; }
+  .gp-largo.largo { color: #8a5a00; font-weight: 700; }
+
+  .gp-vacio { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+  .gp-vacio i { font-size: 2.6rem; display: block; margin-bottom: 12px; opacity: 0.3; }
+
+  /* Ver en grande */
+  #verModal .modal-box { max-width: 960px; width: 96vw; }
+  #verModal .modal-body { padding: 0; }
+  .gp-ver-meta { padding: 12px 18px; background: #F8F9FC; border-bottom: 1px solid var(--border); font-size: 0.84rem; }
+  .gp-ver-meta div + div { margin-top: 3px; }
+  .gp-ver-nav { display: flex; gap: 6px; align-items: center; margin-right: 10px; font-size: 0.8rem; color: var(--text-secondary); }
+  .gp-ver-marco { max-height: 74vh; overflow: auto; background: #fff; }
+  .gp-ver-marco iframe { border: 0; width: 100%; height: 600px; display: block; }
+  .gp-ver-sms { padding: 30px; background: #eef1ec; display: flex; justify-content: center; }
+  .gp-ver-sms .gp-burbuja { max-width: 380px; font-size: 0.95rem; }
+  @media (max-width: 768px) { .gp-barra .der { margin-left: 0; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="gp-barra">
+  <div class="gp-tabs">
+    <button type="button" data-canal="email" class="activo"><i class="fas fa-envelope"></i> Email <span class="num" id="numEmail"></span></button>
+    <button type="button" data-canal="sms"><i class="fas fa-sms"></i> SMS <span class="num" id="numSms"></span></button>
+  </div>
+  <input type="search" id="fBuscar" placeholder="Buscar por nombre, asunto o texto...">
+  <select id="fMomento"><option value="">Todos los momentos</option></select>
+  <label><input type="checkbox" id="fInactivas"> Ver inactivas</label>
+  <div class="der">
+    <a class="btn btn-outline-secondary btn-sm" id="btnAdministrar" href="/email/plantillas"><i class="fas fa-edit"></i> Administrar</a>
+  </div>
+</div>
+
+<div id="gpLista"><div class="gp-vacio"><i class="fas fa-spinner fa-spin"></i><p>Cargando plantillas...</p></div></div>
+
+<!-- VER EN GRANDE -->
+<div class="modal-overlay" id="verModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3><i class="fas fa-eye"></i> <span id="verTitulo">Plantilla</span></h3>
+      <span class="gp-ver-nav">
+        <button class="btn btn-outline-secondary btn-sm" id="verPrev" title="Anterior">&lsaquo;</button>
+        <span id="verCuenta"></span>
+        <button class="btn btn-outline-secondary btn-sm" id="verNext" title="Siguiente">&rsaquo;</button>
+      </span>
+      <button class="modal-close" id="verCerrar">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="gp-ver-meta" id="verMeta"></div>
+      <div id="verCuerpo"></div>
+    </div>
+    <div class="modal-footer" id="verAcciones"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+  'use strict';
+
+  const $ = id => document.getElementById(id);
+  function esc(str) {
+    if (str === null || str === undefined) return '';
+    return String(str).replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
+  }
+
+  let canal = 'email';
+  let EMAIL = [], SMS = [];
+  let visibles = [], viendo = -1;
+
+  async function cargar() {
+    const [email, sms] = await Promise.allSettled([
+      fetch('/api/email/plantillas?todas=1').then(r => r.json()),
+      fetch('/api/sms/mensajes').then(r => r.json())
+    ]);
+    EMAIL = email.status === 'fulfilled' && email.value.success ? email.value.plantillas : [];
+    SMS = sms.status === 'fulfilled' && sms.value.success ? sms.value.items : [];
+    $('numEmail').textContent = EMAIL.length;
+    $('numSms').textContent = SMS.length;
+    pintar();
+  }
+
+  const momentoDe = p => p.momento || 'Sin momento';
+  const activa = p => canal === 'email' ? p.activa : p.estado === 1;
+
+  function filtrar() {
+    const lista = canal === 'email' ? EMAIL : SMS;
+    const q = $('fBuscar').value.trim().toLowerCase(), momento = $('fMomento').value, inactivas = $('fInactivas').checked;
+    return lista.filter(p =>
+      (inactivas || activa(p)) && (!momento || momentoDe(p) === momento) &&
+      (!q || (canal === 'email' ? `${p.nombre} ${p.asunto} ${p.momento}` : `${p.mensaje} ${p.momento} ${p.id_mensaje} ${p.id_campana}`).toLowerCase().includes(q)));
+  }
+
+  function pintarMomentos() {
+    const lista = canal === 'email' ? EMAIL : SMS;
+    const momentos = [...new Set(lista.map(momentoDe))].sort();
+    const actual = $('fMomento').value;
+    $('fMomento').innerHTML = '<option value="">Todos los momentos</option>' +
+      momentos.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+    $('fMomento').value = momentos.includes(actual) ? actual : '';
+  }
+
+  // {{Variable}} resaltada en el texto del SMS.
+  function textoSms(texto) {
+    return esc(texto).replace(/\{\{\s*([^{}]+?)\s*\}\}/g, '<span class="var">{' + '{$1}' + '}</span>');
+  }
+  function largoSms(texto) {
+    const n = (texto || '').length;
+    return `<div class="gp-largo ${n > 160 ? 'largo' : ''}">${n} caracteres${n > 160 ? ` · ${Math.ceil(n / 153)} partes (se cobra cada una)` : ' · 1 parte'}</div>`;
+  }
+
+  function tarjetaEmail(p, i) {
+    return `<div class="gp-card ${p.activa ? '' : 'inactiva'}">
+      <div class="gp-mini ver" data-i="${i}" title="Ver en grande"><iframe sandbox="" loading="lazy" data-i="${i}" title="${esc(p.nombre)}"></iframe></div>
+      <div class="gp-info">
+        <strong title="${esc(p.nombre)}">${esc(p.nombre)}</strong>
+        <span class="asunto" title="${esc(p.asunto)}"><i class="fas fa-envelope"></i> ${esc(p.asunto) || '(Sin asunto)'}</span>
+        <span class="meta"><span class="badge badge-info">${esc(p.momento || 'Sin momento')}</span>
+          ${p.activa ? '' : '<span class="badge badge-secondary">Inactiva</span>'}
+          ${p.usos ? `usada ${p.usos} ${p.usos === 1 ? 'vez' : 'veces'}` : 'sin usar'}</span>
+      </div>
+      <div class="gp-acciones">
+        <button class="btn btn-outline-secondary ver" data-i="${i}"><i class="fas fa-expand"></i> Ver</button>
+        ${p.activa ? `<a class="btn btn-primary" href="/config-email?plantilla=${p.id}"><i class="fas fa-paper-plane"></i> Usar</a>` : ''}
+      </div>
+    </div>`;
+  }
+
+  function tarjetaSms(p, i) {
+    return `<div class="gp-card ${p.estado === 1 ? '' : 'inactiva'}">
+      <div class="gp-celular ver" data-i="${i}" title="Ver en grande">
+        <div class="gp-remitente">SMS</div>
+        <div class="gp-burbuja">${textoSms(p.mensaje)}</div>
+        ${largoSms(p.mensaje)}
+      </div>
+      <div class="gp-info">
+        <span class="meta"><span class="badge badge-info">${esc(p.momento || 'Sin momento')}</span>
+          ${p.etapa ? `<span class="badge badge-primary">Etapa ${p.etapa}</span>` : ''}
+          ${p.estado === 1 ? '' : '<span class="badge badge-secondary">Inactiva</span>'}</span>
+        <span class="meta">ID mensaje: <b>${esc(p.id_mensaje) || '—'}</b></span>
+        <span class="meta">ID campaña: <b>${esc(p.id_campana) || '—'}</b></span>
+        ${p.link ? `<span class="meta" title="${esc(p.link)}"><i class="fas fa-link"></i> ${esc(p.link.length > 48 ? p.link.slice(0, 48) + '…' : p.link)}</span>` : ''}
+      </div>
+      <div class="gp-acciones">
+        <button class="btn btn-outline-secondary ver" data-i="${i}"><i class="fas fa-expand"></i> Ver</button>
+        <button class="btn btn-outline-primary copiar" data-i="${i}"><i class="fas fa-copy"></i> Copiar texto</button>
+      </div>
+    </div>`;
+  }
+
+  // Miniatura: el correo a 600 px escalado al ancho de la tarjeta.
+  function escalarMiniaturas() {
+    document.querySelectorAll('.gp-mini').forEach(caja => {
+      const iframe = caja.querySelector('iframe');
+      iframe.style.transform = `scale(${caja.clientWidth / 600})`;
+    });
+  }
+
+  function pintar() {
+    pintarMomentos();
+    $('btnAdministrar').href = canal === 'email' ? '/email/plantillas' : '/config-mensajes';
+    visibles = filtrar();
+    const total = (canal === 'email' ? EMAIL : SMS).length;
+    if (!visibles.length) {
+      $('gpLista').innerHTML = `<div class="gp-vacio"><i class="fas fa-inbox"></i><p>${total
+        ? 'Ninguna plantilla con esos filtros.' : `No hay plantillas de ${canal === 'email' ? 'email' : 'SMS'} guardadas.`}</p></div>`;
+      return;
+    }
+    $('gpLista').innerHTML = `<div class="gp-grid">${visibles.map(canal === 'email' ? tarjetaEmail : tarjetaSms).join('')}</div>`;
+    if (canal === 'email') {
+      document.querySelectorAll('.gp-mini iframe').forEach(f => { f.srcdoc = visibles[f.dataset.i].html || ''; });
+      escalarMiniaturas();
+    }
+    document.querySelectorAll('#gpLista .ver').forEach(el => el.addEventListener('click', () => abrir(Number(el.dataset.i))));
+    document.querySelectorAll('#gpLista .copiar').forEach(el => el.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(visibles[el.dataset.i].mensaje || ''); el.innerHTML = '<i class="fas fa-check"></i> Copiado'; }
+      catch (e) { el.textContent = 'No se pudo copiar'; }
+    }));
+  }
+
+  // ========== VER EN GRANDE (con ‹ › para pasar entre las plantillas filtradas) ==========
+  function abrir(i) {
+    viendo = i;
+    const p = visibles[i];
+    if (!p) return;
+    $('verCuenta').textContent = `${i + 1} de ${visibles.length}`;
+    $('verPrev').disabled = i === 0;
+    $('verNext').disabled = i >= visibles.length - 1;
+    if (canal === 'email') {
+      $('verTitulo').textContent = p.nombre;
+      $('verMeta').innerHTML = `<div><strong>Asunto:</strong> ${esc(p.asunto) || '(Sin asunto)'}</div>
+        <div><strong>Momento:</strong> ${esc(p.momento || 'Sin momento')} · ${p.activa ? 'Activa' : 'Inactiva'} · ${p.usos ? 'usada ' + p.usos + ' veces' : 'sin usar'}</div>
+        ${p.variables && p.variables.length ? `<div><strong>Variables:</strong> ${p.variables.map(v => `<span class="badge badge-secondary">${esc(v)}</span>`).join(' ')}</div>` : ''}`;
+      $('verCuerpo').innerHTML = '<div class="gp-ver-marco"><iframe sandbox="allow-same-origin" title="Plantilla en grande"></iframe></div>';
+      const iframe = $('verCuerpo').querySelector('iframe');
+      // Alto del contenido (sin scripts: allow-same-origin solo deja medir).
+      iframe.onload = () => {
+        const doc = iframe.contentDocument;
+        if (doc && doc.documentElement) iframe.style.height = Math.max(400, doc.documentElement.scrollHeight) + 'px';
+      };
+      iframe.srcdoc = p.html || '';
+      $('verAcciones').innerHTML = `<a class="btn btn-outline-secondary" href="/email/plantillas"><i class="fas fa-edit"></i> Editar</a>
+        ${p.activa ? `<a class="btn btn-primary" href="/config-email?plantilla=${p.id}"><i class="fas fa-paper-plane"></i> Usar para enviar</a>` : ''}`;
+    } else {
+      $('verTitulo').textContent = `SMS · ${p.momento || 'Sin momento'}${p.etapa ? ' · Etapa ' + p.etapa : ''}`;
+      $('verMeta').innerHTML = `<div><strong>ID mensaje:</strong> ${esc(p.id_mensaje) || '—'} · <strong>ID campaña:</strong> ${esc(p.id_campana) || '—'} · ${p.estado === 1 ? 'Activa' : 'Inactiva'}</div>
+        ${p.link ? `<div><strong>Link</strong> (va en {{ '{{' }}Link{{ '}}' }}): ${esc(p.link)}</div>` : ''}`;
+      $('verCuerpo').innerHTML = `<div class="gp-ver-sms"><div><div class="gp-burbuja">${textoSms(p.mensaje)}</div>${largoSms(p.mensaje)}</div></div>`;
+      $('verAcciones').innerHTML = '<a class="btn btn-outline-secondary" href="/config-mensajes"><i class="fas fa-edit"></i> Editar</a>';
+    }
+    $('verModal').classList.add('active');
+  }
+  function cerrar() { $('verModal').classList.remove('active'); }
+  $('verPrev').addEventListener('click', () => abrir(viendo - 1));
+  $('verNext').addEventListener('click', () => abrir(viendo + 1));
+  $('verCerrar').addEventListener('click', cerrar);
+  $('verModal').addEventListener('click', e => { if (e.target.id === 'verModal') cerrar(); });
+  document.addEventListener('keydown', e => {
+    if (!$('verModal').classList.contains('active')) return;
+    if (e.key === 'Escape') cerrar();
+    if (e.key === 'ArrowLeft' && viendo > 0) abrir(viendo - 1);
+    if (e.key === 'ArrowRight' && viendo < visibles.length - 1) abrir(viendo + 1);
+  });
+
+  // ========== FILTROS ==========
+  document.querySelectorAll('.gp-tabs button').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('.gp-tabs button').forEach(x => x.classList.toggle('activo', x === b));
+    canal = b.dataset.canal;
+    $('fMomento').value = '';
+    pintar();
+  }));
+  $('fBuscar').addEventListener('input', pintar);
+  $('fMomento').addEventListener('change', pintar);
+  $('fInactivas').addEventListener('change', pintar);
+  window.addEventListener('resize', escalarMiniaturas);
+
+  // /plantillas#sms abre directo la pestaña de SMS.
+  if (location.hash === '#sms') {
+    canal = 'sms';
+    document.querySelectorAll('.gp-tabs button').forEach(x => x.classList.toggle('activo', x.dataset.canal === 'sms'));
+  }
+  cargar();
+})();
+</script>
+{% endblock %}
