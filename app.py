@@ -1400,6 +1400,22 @@ def email_validar():
 
 # ==================== EMAIL - ENVIAR ====================
 
+def _progreso_email(campana):
+    """Avance de la carga de contactos en la actividad en vivo del inicio (cada 100)."""
+    def progreso(hechos, total, con_error):
+        log_activity(f"📧 '{campana}': {hechos}/{total} contactos cargados"
+                     + (f", {con_error} con error" if con_error else ""))
+    return progreso
+
+
+def _aviso_fallidos_email(resultado):
+    """Texto para el resultado cuando algunos contactos no se pudieron cargar (no les llegó)."""
+    if not resultado.get("fallidos"):
+        return ""
+    return (f". {resultado['fallidos']} no se pudieron cargar en la plataforma de email y no les llegó: "
+            "vuelve a enviar y saldrá solo a ellos (los que ya recibieron hoy se excluyen solos).")
+
+
 @app.route("/api/email/enviar", methods=["POST"])
 def email_send():
     """Envía emails ya (la lógica vive en services.email_service.enviar_campana_email)."""
@@ -1421,15 +1437,18 @@ def email_send():
         if error_response:
             return error_response
         plantilla_guardada = _plantilla_email_del_envio(data)
+        log_activity(f"📧 Envío de email '{campana_nombre}': {len(rows)} filas, cargando contactos...")
         resultado = enviar_campana_email(
             bq_client, rows, plantilla, asunto, _campana_con_plantilla(campana_nombre, plantilla_guardada),
             usuario, reply_email, confirmar_reenvio, load_config().get("email", {}),
+            progreso=_progreso_email(campana_nombre),
         )
         _registrar_uso_plantilla_email(plantilla_guardada)
         log_gui_action("Envio Email", campana_id=resultado["campana_id"], enviados=resultado["enviados"])
-        return jsonify({"success": True, **resultado, "message":
-                        f"{resultado['enviados']} emails enviados (campaña {resultado['campana_id']}: "
-                        f"{resultado['estado_campana']} en la plataforma de email)"})
+        mensaje = (f"{resultado['enviados']} emails enviados (campaña {resultado['campana_id']}: "
+                   f"{resultado['estado_campana']} en la plataforma de email)") + _aviso_fallidos_email(resultado)
+        log_activity(f"📧 Envío de email '{campana_nombre}': {mensaje}")
+        return jsonify({"success": True, **resultado, "message": mensaje})
     except (EmailServiceError, EmailClientError) as exc:
         logger_email.error(f"❌ Envío de email '{campana_nombre}' rechazado: {exc}")
         return jsonify({"success": False, "message": str(exc)}), 400
@@ -1713,7 +1732,7 @@ def execute_email_schedule(schedule_id: str):
                 resultado = enviar_campana_email(
                     bq_client, fetched["rows"], prog.plantilla, prog.asunto or "",
                     prog.campana or "", prog.usuario or "sistema", prog.reply_email or "",
-                    False, load_config().get("email", {}),
+                    False, load_config().get("email", {}), progreso=_progreso_email(campana),
                 )
             except SinDestinatariosEmail as exc:
                 # Sin datos no es una falla: queda con 0 enviados y la recurrente sigue.
@@ -1733,7 +1752,8 @@ def execute_email_schedule(schedule_id: str):
                                     excluidos=resultado["blacklist_excluidos"] + resultado["duplicados_excluidos"],
                                     mensaje=f"Campaña {resultado['campana_id']}: {resultado['estado_campana']}")
                 log_activity(f"📧 Email programado '{campana or schedule_id}': {resultado['enviados']} enviados "
-                             f"(campaña {resultado['campana_id']}, {resultado['estado_campana']}).")
+                             f"(campaña {resultado['campana_id']}, {resultado['estado_campana']})."
+                             + _aviso_fallidos_email(resultado))
         except Exception as exc:
             db.session.rollback()
             logger_email.exception(f"❌ Error ejecutando el email programado {schedule_id}: {exc}")

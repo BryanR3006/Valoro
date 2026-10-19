@@ -1,10 +1,13 @@
 
 import json
 import logging
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from datos_personales import enmascarar_email
 
@@ -14,6 +17,12 @@ BASE_URL = "https://api.esmsv.com/v1"
 # La API a veces tarda más de 30 s en crear o enviar una campaña: con menos
 # espera la campaña quedaba creada en borrador y nunca salía.
 TIMEOUT_CAMPANA = 120
+# A veces la API no acepta la conexión y Windows tarda 21 s en rendirse: con 6 s
+# y reintentos un corte cuesta unos segundos y el contacto no se pierde. Solo se
+# reintenta al conectar (la petición no salió: no se duplica nada).
+TIMEOUT_CONEXION = 6
+TIMEOUT_RESPUESTA = 30
+REINTENTOS_CONEXION = 4
 
 
 class EmailClientError(Exception):
@@ -51,12 +60,27 @@ class EmailClient:
             raise EmailClientError("API Key de Email Marketing es requerida.")
         
         self.api_key = api_key
-        self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": self.api_key,
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json"
-        })
+        self._hilo = threading.local()
+
+    @property
+    def session(self) -> requests.Session:
+        """
+        Sesión HTTP de este hilo (los contactos se cargan en paralelo y una
+        sesión no se comparte entre hilos), con reintentos de conexión.
+        """
+        sesion = getattr(self._hilo, "sesion", None)
+        if sesion is None:
+            sesion = requests.Session()
+            sesion.headers.update({
+                "Authorization": self.api_key,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json"
+            })
+            reintentos = Retry(total=REINTENTOS_CONEXION, connect=REINTENTOS_CONEXION, read=0, status=0,
+                               other=0, backoff_factor=1, allowed_methods=None, raise_on_status=False)
+            sesion.mount("https://", HTTPAdapter(max_retries=reintentos))
+            self._hilo.sesion = sesion
+        return sesion
 
     # ==================================================
     # 📋 CONTACTOS
@@ -66,24 +90,21 @@ class EmailClient:
        
         url = f"{BASE_URL}/contacts/create"
         data = {"email": email}
-        logger.info(f"📧 Creando contacto en: {url}")
-        logger.info(f"📧 Datos: {data}")
-        
 
         if campos_personalizados:
             for field_id, value in campos_personalizados.items():
                 data[f"customFields[{field_id}]"] = value
         
         try:
-            resp = self.session.post(url, data=data, timeout=30)
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
             result = resp.json()
             
             if result.get("status") == "ok":
-                logger.info(f"✅ Contacto creado: {enmascarar_email(email)}")
+                logger.debug(f"✅ Contacto creado: {enmascarar_email(email)}")
                 return {"success": True, "data": result.get("data", {})}
             elif result.get("status") == "error":
                 if result.get("code") == "errorMsg_contactAlreadyExist":
-                    logger.warning(f"⚠️ Contacto ya existe: {enmascarar_email(email)}")
+                    logger.debug(f"Contacto ya existe: {enmascarar_email(email)}")
                     return {"success": True, "data": {"email": email}, "ya_existe": True}
                 raise EmailClientError(_error_api(result.get("code", "Error desconocido")))
             return {"success": False, "error": result}
@@ -110,13 +131,34 @@ class EmailClient:
             data["listId"] = list_id
         
         try:
-            resp = self.session.post(url, data=data, timeout=30)
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
             result = resp.json()
             
             if result.get("status") == "ok":
                 return {"success": True, "data": result.get("data", {})}
             raise EmailClientError(_error_api(result.get("code", "Error desconocido")))
         
+        except requests.exceptions.RequestException as e:
+            raise EmailClientError(f"Error de red: {e}")
+
+    def editar_contacto(self, contact_id: int, campos_personalizados: Dict[int, str]) -> Dict:
+        """
+        Actualiza los campos personalizados de un contacto que ya existe, en un
+        solo llamado. POST /v1/contacts/edit (id + customFields[N]).
+        """
+        url = f"{BASE_URL}/contacts/edit"
+        data = {"id": contact_id}
+        for field_id, value in (campos_personalizados or {}).items():
+            data[f"customFields[{field_id}]"] = value
+
+        try:
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
+            result = resp.json()
+
+            if result.get("status") == "ok":
+                return {"success": True}
+            raise EmailClientError(_error_api(result.get("code", "Error desconocido")))
+
         except requests.exceptions.RequestException as e:
             raise EmailClientError(f"Error de red: {e}")
 
@@ -131,7 +173,7 @@ class EmailClient:
             data[f"contactsIds[{i}]"] = cid
         
         try:
-            resp = self.session.post(url, data=data, timeout=30)
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -154,7 +196,7 @@ class EmailClient:
         data = {"name": nombre}
         
         try:
-            resp = self.session.post(url, data=data, timeout=30)
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -181,7 +223,7 @@ class EmailClient:
             data[f"contactsIds[{i}]"] = cid
         
         try:
-            resp = self.session.post(url, data=data, timeout=60)
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, 60))
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -209,7 +251,7 @@ class EmailClient:
                 data[key] = value
         
         try:
-            resp = self.session.post(url, data=data, timeout=TIMEOUT_CAMPANA)
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_CAMPANA))
             result = resp.json()
 
             if result.get("status") == "ok":
@@ -231,7 +273,7 @@ class EmailClient:
             data["sendDate"] = send_date
 
         try:
-            resp = self.session.post(url, data=data, timeout=TIMEOUT_CAMPANA)
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_CAMPANA))
             result = resp.json()
 
             if result.get("status") == "ok":
@@ -265,7 +307,7 @@ class EmailClient:
             data["status"] = status
         
         try:
-            resp = self.session.post(url, data=data, timeout=30)
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -283,7 +325,7 @@ class EmailClient:
         url = f"{BASE_URL}/campaign/{campana_id}"
 
         try:
-            resp = self.session.get(url, timeout=60)
+            resp = self.session.get(url, timeout=(TIMEOUT_CONEXION, 60))
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -302,7 +344,7 @@ class EmailClient:
         data = {"id": campana_id}
         
         try:
-            resp = self.session.post(url, data=data, timeout=30)
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -321,7 +363,7 @@ class EmailClient:
             data["email"] = email
         
         try:
-            resp = self.session.post(url, data=data, timeout=30)
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -340,7 +382,7 @@ class EmailClient:
         data = {"limit": "100"}
         
         try:
-            resp = self.session.post(url, data=data, timeout=30)
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -363,7 +405,7 @@ class EmailClient:
         }
         
         try:
-            resp = self.session.post(url, data=data, timeout=30)
+            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
             result = resp.json()
             
             if result.get("status") == "ok":

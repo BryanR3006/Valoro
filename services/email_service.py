@@ -3,12 +3,14 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 import pandas as pd
 
+from datos_personales import enmascarar_email
 from services.email_client import EmailTimeoutError
 from services.variables import buscar_columna, es_nombre
 
@@ -118,49 +120,45 @@ def preview_email(rows: List[Dict], plantilla: str, asunto: str, limit: int = 3)
         return {"success": False, "message": str(e)}
 
 
+# Filas de EmailLog por INSERT (14 parámetros por fila; BigQuery admite 10.000).
+FILAS_POR_INSERT = 300
+_COLUMNAS_EMAIL_LOG = ("id", "email", "asunto", "contenido", "campana_id", "campana_nombre", "fecha_envio",
+                       "resultado", "bulk_id", "error", "campana", "usuario", "fecha_creacion",
+                       "fecha_actualizacion")
+_FECHAS_EMAIL_LOG = {"fecha_envio", "fecha_creacion", "fecha_actualizacion"}
+
+
 def guardar_email_log(client, registros: List[Dict]) -> None:
-    """Guarda registros en EmailLog usando INSERT SQL con escaping seguro."""
+    """
+    Guarda los registros en EmailLog con INSERT de varias filas con parámetros
+    (de a FILAS_POR_INSERT). Antes era un INSERT por correo: 800 correos, 800
+    consultas seguidas a BigQuery (más de 15 minutos).
+    """
     if not client or not registros:
         return
-    
-    logger.info(f"📧 Guardando {len(registros)} registros con INSERT SQL")
-    
+    from google.cloud import bigquery
+
+    guardados = 0
     try:
-        for registro in registros:
-            id_val = _escape_sql(registro.get("id", ""))
-            email_val = _escape_sql(registro.get("email", ""))
-            asunto_val = _escape_sql(registro.get("asunto", ""))
-            contenido_val = _escape_sql(registro.get("contenido", ""))
-            campana_id_val = _escape_sql(registro.get("campana_id", ""))
-            campana_nombre_val = _escape_sql(registro.get("campana_nombre", ""))
-            fecha_envio_val = registro.get("fecha_envio", "")
-            resultado_val = _escape_sql(registro.get("resultado", ""))
-            bulk_id_val = _escape_sql(registro.get("bulk_id", ""))
-            error_val = _escape_sql(registro.get("error", ""))
-            campana_val = _escape_sql(registro.get("campana", ""))
-            usuario_val = _escape_sql(registro.get("usuario", ""))
-            fecha_creacion_val = registro.get("fecha_creacion", "")
-            fecha_actualizacion_val = registro.get("fecha_actualizacion", "")
-            
-            insert_sql = f"""
-                INSERT INTO `{EMAIL_LOG_TABLE}` 
-                (id, email, asunto, contenido, campana_id, campana_nombre, 
-                 fecha_envio, resultado, bulk_id, error, campana, usuario, 
-                 fecha_creacion, fecha_actualizacion)
-                VALUES (
-                    '{id_val}', '{email_val}', '{asunto_val}', '''{contenido_val}''', 
-                    '{campana_id_val}', '{campana_nombre_val}', 
-                    TIMESTAMP('{fecha_envio_val}'), '{resultado_val}', 
-                    '{bulk_id_val}', '{error_val}', '{campana_val}', 
-                    '{usuario_val}', TIMESTAMP('{fecha_creacion_val}'), 
-                    TIMESTAMP('{fecha_actualizacion_val}')
-                )
-            """
-            client.query(insert_sql).result()
-        
-        logger.info(f"✅ {len(registros)} registros guardados en EmailLog")
+        for inicio in range(0, len(registros), FILAS_POR_INSERT):
+            parte = registros[inicio:inicio + FILAS_POR_INSERT]
+            valores, parametros = [], []
+            for i, registro in enumerate(parte):
+                valores.append("(" + ", ".join(f"@{c}_{i}" for c in _COLUMNAS_EMAIL_LOG) + ")")
+                for c in _COLUMNAS_EMAIL_LOG:
+                    if c in _FECHAS_EMAIL_LOG:
+                        parametros.append(bigquery.ScalarQueryParameter(f"{c}_{i}", "TIMESTAMP", registro.get(c) or None))
+                    else:
+                        parametros.append(bigquery.ScalarQueryParameter(f"{c}_{i}", "STRING", str(registro.get(c) or "")))
+            client.query(
+                f"INSERT INTO `{EMAIL_LOG_TABLE}` ({', '.join(_COLUMNAS_EMAIL_LOG)}) VALUES {', '.join(valores)}",
+                job_config=bigquery.QueryJobConfig(query_parameters=parametros),
+            ).result()
+            guardados += len(parte)
+        logger.info(f"✅ {guardados} registros guardados en EmailLog")
     except Exception as e:
-        logger.error(f"Error guardando logs: {e}")
+        logger.error(f"Error guardando EmailLog ({guardados} de {len(registros)} guardados): {e}")
+
 
 def traducir_a_member(html: str, mapeo: Dict[str, int]) -> str:
     """{{variable}} -> %Member:CustomFieldN% (el campo que da campo_de)."""
@@ -226,14 +224,6 @@ def validar_variables_plantilla(rows: List[Dict], plantilla: str, asunto: str = 
         "total_variables": len(todas_vars),
         "columnas_disponibles": list(columnas_disponibles)
     }
-
-def _escape_sql(valor: str) -> str:
-    """Escapa un valor para ser usado en SQL."""
-    if valor is None:
-        return ""
-    # Escapar backslash primero, luego comillas simples
-    return str(valor).replace("\\", "\\\\").replace("'", "\\'")
-
 
 # ==================== ENVÍO DE UNA CAMPAÑA DE EMAIL ====================
 # Lo usan el envío inmediato (/api/email/enviar), los programados
@@ -424,25 +414,78 @@ def filtrar_destinatarios(client_bq, rows: List[Dict], confirmar_reenvio: bool =
     }
 
 
-def _crear_contacto(client, email: str, campos: Dict[int, str]) -> Optional[int]:
-    """Crea el contacto; si ya existe, lo borra y lo crea de nuevo con los datos de hoy."""
-    resultado = client.crear_contacto(email, campos)
-    if not resultado.get("success"):
-        raise EmailServiceError(str(resultado.get("error", "Error creando contacto")))
-    contact_id = resultado.get("data", {}).get("id")
-    if contact_id:
-        return contact_id
-    if not resultado.get("ya_existe"):
-        raise EmailServiceError("No se obtuvo ID del contacto")
-    buscar = client.obtener_contactos(email=email)
-    encontrados = buscar.get("data", {}).get("data", []) if buscar.get("success") else []
-    if not encontrados:
-        raise EmailServiceError("Contacto existente no encontrado")
-    client.eliminar_contactos([encontrados[0]["id"]])
-    nuevo = client.crear_contacto(email, campos)
-    if nuevo.get("success") and nuevo.get("data", {}).get("id"):
-        return nuevo["data"]["id"]
-    raise EmailServiceError("No se pudo recrear el contacto")
+# Contactos que se cargan a la vez en la plataforma (email.max_workers en config.json).
+# De a uno, 800 contactos tomaban casi una hora; la API responde en menos de 1 s.
+HILOS_CONTACTOS = 5
+CONTACTOS_POR_PAGINA = 100        # máximo que devuelve contacts/getall
+SUSCRIPCIONES_POR_LLAMADO = 500
+
+
+def campos_de_fila(row: Dict, mapeo: Dict[str, int], con_vacios: bool = False) -> Dict[int, str]:
+    """
+    CustomField -> valor de las columnas de la fila que tienen campo en la cuenta.
+    con_vacios: también los vacíos (al actualizar un contacto, para borrar el
+    dato de un envío anterior). Si dos columnas van al mismo campo gana la que trae dato.
+    """
+    campos = {}
+    for columna, valor in row.items():
+        campo_id = campo_de(columna, mapeo)
+        if campo_id is None:
+            continue
+        texto = "" if _vacio(valor) else str(valor).strip()
+        if texto or (con_vacios and campo_id not in campos):
+            campos[campo_id] = texto
+    return campos
+
+
+def directorio_contactos(client, hilos: int = HILOS_CONTACTOS, max_paginas: Optional[int] = None) -> Optional[Dict[str, int]]:
+    """
+    email (minúsculas) -> id de todos los contactos de la cuenta, leídos de a
+    100 (páginas en paralelo). Con max_paginas, si la cuenta tiene más páginas
+    devuelve None: sale más barato buscar contacto por contacto.
+    """
+    def pagina(numero):
+        return client.obtener_contactos(limit=CONTACTOS_POR_PAGINA, page=numero).get("data", {})
+
+    primera = pagina(1)
+    paginas = int(primera.get("last_page") or 1)
+    if max_paginas is not None and paginas > max_paginas:
+        return None
+    datos = [primera]
+    if paginas > 1:
+        with ThreadPoolExecutor(max_workers=hilos) as ejecutor:
+            datos += list(ejecutor.map(pagina, range(2, paginas + 1)))
+    return {str(c["email"]).strip().lower(): c["id"]
+            for d in datos for c in d.get("data", []) if c.get("email") and c.get("id")}
+
+
+def _cargar_contacto(client, email: str, row: Dict, mapeo: Dict[str, int],
+                     directorio: Optional[Dict[str, int]]) -> int:
+    """
+    Deja el contacto en la cuenta con los datos de esta fila y devuelve su id.
+    Si ya existe se actualizan sus campos (contacts/edit): un llamado, y no se
+    pierde su historial ni si se dio de baja. Si es nuevo se crea.
+    """
+    contact_id = (directorio or {}).get(email.lower())
+    if not contact_id:
+        resultado = client.crear_contacto(email, campos_de_fila(row, mapeo))
+        if not resultado.get("success"):
+            raise EmailServiceError(str(resultado.get("error", "Error creando contacto")))
+        contact_id = resultado.get("data", {}).get("id")
+        if contact_id:
+            return contact_id
+        if not resultado.get("ya_existe"):
+            raise EmailServiceError("No se obtuvo ID del contacto")
+        # Ya existía (no estaba en el directorio): se busca para actualizarlo.
+        encontrados = client.obtener_contactos(email=email).get("data", {}).get("data", [])
+        exacto = [c for c in encontrados if str(c.get("email") or "").strip().lower() == email.lower()]
+        if not (exacto or encontrados):
+            raise EmailServiceError("Contacto existente no encontrado")
+        contact_id = (exacto or encontrados)[0]["id"]
+    campos = campos_de_fila(row, mapeo, con_vacios=True)
+    if campos:
+        client.editar_contacto(contact_id, campos)
+    return contact_id
 
 
 def _crear_campana(client, datos: Dict, lista_id) -> int:
@@ -510,11 +553,13 @@ def verificar_campana_enviada(client, campana_id, intentos: int = 6, espera: int
 
 def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: str, campana: str,
                          usuario: str, reply_email: str, confirmar_reenvio: bool,
-                         email_config: Dict, email_client=None) -> Dict:
+                         email_config: Dict, email_client=None,
+                         progreso: Optional[Callable[[int, int, int], None]] = None) -> Dict:
     """
     Envía una campaña de email a las filas dadas: filtros (lista negra y
     duplicados del día), validación de variables, contactos, lista, campaña,
     envío y EmailLog. Lanza EmailServiceError (o ErrorListaNegraEmail) si no se puede.
+    progreso(hechos, total, con_error) se llama mientras se cargan los contactos.
     """
     from services.email_client import EmailClient
 
@@ -554,24 +599,41 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
         raise EmailServiceError("No se pudo crear la lista de contactos")
     lista_id = lista["data"]["id"]
 
+    # Contactos: se lee una vez el directorio de la cuenta (si sale más barato que
+    # buscarlos de a uno) y cada contacto es un solo llamado, varios a la vez.
+    hilos = max(1, min(int(email_config.get("max_workers") or HILOS_CONTACTOS), 10))
+    total = len(destinatarios)
+    inicio = time.time()
+    try:
+        directorio = directorio_contactos(client, hilos, max_paginas=max(1, total // 2))
+    except Exception as exc:
+        logger.warning(f"⚠️ No se pudo leer el directorio de contactos ({exc}): se buscan de a uno.")
+        directorio = None
+
     contact_ids, enviados, errores = [], [], []
-    for row in destinatarios:
-        email = str(row.get(email_column) or "").strip()
-        campos = {}
-        for columna, valor in row.items():
-            if valor is None or str(valor).strip() == "":
-                continue
-            campo_id = campo_de(columna, mapeo)
-            if campo_id is not None:
-                campos[campo_id] = str(valor).strip()
-        try:
-            contact_ids.append(_crear_contacto(client, email, campos))
-            enviados.append(row)
-        except Exception as exc:
-            errores.append({"email": email, "error": str(exc)})
+    with ThreadPoolExecutor(max_workers=hilos) as ejecutor:
+        futuros = {}
+        for row in destinatarios:
+            email = str(row.get(email_column) or "").strip()
+            futuros[ejecutor.submit(_cargar_contacto, client, email, row, mapeo, directorio)] = (email, row)
+        for hechos, futuro in enumerate(as_completed(futuros), 1):
+            email, row = futuros[futuro]
+            try:
+                contact_ids.append(futuro.result())
+                enviados.append(row)
+            except Exception as exc:
+                errores.append({"email": enmascarar_email(email), "error": str(exc)})
+                logger.warning(f"⚠️ No se pudo cargar el contacto {enmascarar_email(email)}: {exc}")
+            if progreso and (hechos % 100 == 0 or hechos == total):
+                progreso(hechos, total, len(errores))
+    logger.info(f"📧 Contactos: {len(contact_ids)} de {total} cargados en {time.time() - inicio:.0f} s "
+                f"({len(errores)} con error, {hilos} a la vez, directorio: {'sí' if directorio is not None else 'no'})")
     if not contact_ids:
-        raise EmailServiceError("No se pudieron crear contactos")
-    client.suscribir_contactos(contact_ids, lista_id)
+        raise EmailServiceError(
+            "No se pudo cargar ningún contacto en la plataforma de email"
+            + (f": {errores[0]['error']}" if errores else "."))
+    for i in range(0, len(contact_ids), SUSCRIPCIONES_POR_LLAMADO):
+        client.suscribir_contactos(contact_ids[i:i + SUSCRIPCIONES_POR_LLAMADO], lista_id)
 
     nombre_campana = campana or f"Email {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     datos_campana = {
