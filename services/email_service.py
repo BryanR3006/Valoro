@@ -418,7 +418,7 @@ def filtrar_destinatarios(client_bq, rows: List[Dict], confirmar_reenvio: bool =
 # De a uno, 800 contactos tomaban casi una hora; la API responde en menos de 1 s.
 HILOS_CONTACTOS = 5
 CONTACTOS_POR_PAGINA = 100        # máximo que devuelve contacts/getall
-SUSCRIPCIONES_POR_LLAMADO = 500
+SUSCRIPCIONES_POR_LLAMADO = 100  # contacts/suscribe no acepta más (invalid_max_elements)
 
 
 def campos_de_fila(row: Dict, mapeo: Dict[str, int], con_vacios: bool = False) -> Dict[int, str]:
@@ -457,6 +457,24 @@ def directorio_contactos(client, hilos: int = HILOS_CONTACTOS, max_paginas: Opti
             datos += list(ejecutor.map(pagina, range(2, paginas + 1)))
     return {str(c["email"]).strip().lower(): c["id"]
             for d in datos for c in d.get("data", []) if c.get("email") and c.get("id")}
+
+
+def suscribir_en_bloques(client, contact_ids: List[int], lista_id, tamano: int = SUSCRIPCIONES_POR_LLAMADO) -> None:
+    """
+    Suscribe los contactos a la lista de a `tamano` (la API acepta 100 por
+    llamado). Si la API rechaza el bloque por grande (invalid_max_elements),
+    lo parte en dos y lo vuelve a intentar.
+    """
+    from services.email_client import EmailClientError
+    for i in range(0, len(contact_ids), tamano):
+        bloque = contact_ids[i:i + tamano]
+        try:
+            client.suscribir_contactos(bloque, lista_id)
+        except EmailClientError as exc:
+            if "invalid_max_elements" not in str(exc) or len(bloque) == 1:
+                raise
+            logger.warning(f"⚠️ La API no acepta {len(bloque)} contactos por suscripción: se parten en dos.")
+            suscribir_en_bloques(client, bloque, lista_id, max(1, len(bloque) // 2))
 
 
 def _cargar_contacto(client, email: str, row: Dict, mapeo: Dict[str, int],
@@ -632,8 +650,7 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
         raise EmailServiceError(
             "No se pudo cargar ningún contacto en la plataforma de email"
             + (f": {errores[0]['error']}" if errores else "."))
-    for i in range(0, len(contact_ids), SUSCRIPCIONES_POR_LLAMADO):
-        client.suscribir_contactos(contact_ids[i:i + SUSCRIPCIONES_POR_LLAMADO], lista_id)
+    suscribir_en_bloques(client, contact_ids, lista_id)
 
     nombre_campana = campana or f"Email {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     datos_campana = {
