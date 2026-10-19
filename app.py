@@ -2891,5 +2891,5 @@ if __name__ == "__main__":
     # arrancar corría dos veces. Tras editar un .py hay que reiniciar a mano.
     # Puerto configurable con la variable de entorno PORT (por defecto 5000),
     # para poder correr una copia de prueba sin chocar con la aplicación real.
-    app.run(debug=True, use_reloader=False, host="0.0.0.0",
-            port=int(os.environ.get("PORT", "3001")))
+    app.run(debug=False, use_reloader=False, host="0.0.0.0",
+            port=int(os.environ.get("PORT", "5000")))
