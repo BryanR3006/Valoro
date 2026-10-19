@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 from uuid import uuid4
 from database import db, ProgramacionSms
 from listas_negras import LISTA_NEGRA_SMS
+from services.variables import buscar_columna, clave, es_nombre
 import requests
 import logging
 import pandas as pd
@@ -192,18 +193,18 @@ def validar_variables(rows: List[Dict], variables: List[str]) -> Tuple[List[str]
     if not rows:
         return [], {}
     
-    # Obtener columnas disponibles (case-insensitive)
-    columns_lower = {str(key).strip().lower(): str(key) for key in rows[0].keys()}
+    # Misma comparación que construir_mensaje (services/variables.py): sin
+    # mayúsculas, tildes, espacios ni _, y el nombre del cliente con sus alias.
+    columnas = list(rows[0].keys())
     faltantes = []
     vacias = {}
-    
+
     for var in variables:
-        var_lower = var.strip().lower()
-        if var_lower not in columns_lower:
+        real_col = buscar_columna(var, columnas)
+        if real_col is None:
             faltantes.append(var)
         else:
             # Contar valores vacíos o nulos
-            real_col = columns_lower[var_lower]
             vacios_count = sum(
                 1 for row in rows 
                 if row.get(real_col) is None or str(row.get(real_col, "")).strip() == ""
@@ -215,15 +216,17 @@ def validar_variables(rows: List[Dict], variables: List[str]) -> Tuple[List[str]
 
 
 def construir_mensaje(row: Dict, plantilla: str, variables: List[str]) -> str:
-    """Construye el mensaje personalizado reemplazando variables."""
+    """
+    Construye el mensaje reemplazando las variables con la columna que les
+    corresponde (services/variables.buscar_columna: {{Nombre}} toma la columna
+    nombre, Nombre Cliente o customer_name). Sin columna, la variable queda vacía.
+    """
     msg = plantilla
-    
-    # Mapa de columnas (case-insensitive) para búsqueda flexible
-    row_lower = {str(k).strip().lower(): v for k, v in row.items()}
-    
+    columnas = list(row.keys())
+
     for var in variables:
-        var_lower = var.strip().lower()
-        valor = row_lower.get(var_lower, "")
+        real_col = buscar_columna(var, columnas)
+        valor = row.get(real_col, "") if real_col is not None else ""
         if valor is None:
             valor = ""
         # Reemplazar {{variable}} en la plantilla
@@ -307,15 +310,12 @@ def preparar_sms(rows: List[Dict], plantilla: str, link: str = "") -> Tuple[List
     invalid_numbers = 0
 
     # Señuelos: números de control que reciben cada envío (config.json → infobip.senuelos).
-    # Van marcados: nunca se excluyen (lista negra ni duplicados del día).
+    # Van marcados: nunca se excluyen (lista negra ni duplicados del día). Su mensaje
+    # sale con los datos del primer cliente y su propio nombre (fila_senuelo).
+    base = rows[0] if rows else {}
     for senuelo in senuelos_configurados():
         telefono = str(senuelo["telefono"]).strip()
-        row = {
-            "Nombre Cliente": senuelo.get("nombre", ""),
-            # Con link del mensaje, el señuelo recibe el mismo que los clientes.
-            "Link": (link or "").strip() or senuelo.get("link", ""),
-            "telefono": telefono
-        }
+        row = fila_senuelo(senuelo, base, variables, link, phone_column)
         prepared.append({
             "phone": telefono,
             "text": construir_mensaje(row, plantilla, variables),
@@ -351,18 +351,51 @@ def preparar_sms(rows: List[Dict], plantilla: str, link: str = "") -> Tuple[List
         }
 
 
+def fila_senuelo(senuelo: Dict, base: Dict, variables: List[str], link: str = "",
+                 phone_column: Optional[str] = None) -> Dict:
+    """
+    Fila de un señuelo para armar su SMS: los valores de las variables de la
+    plantilla los toma de un cliente real (base), así el mensaje sale completo;
+    el nombre, el teléfono y el link son los del señuelo. Solo van esas columnas:
+    el resto de datos del cliente no viaja en el callbackData del señuelo.
+    """
+    fila = {}
+    for var in variables:
+        columna = buscar_columna(var, base.keys()) if base else None
+        if columna is not None:
+            fila[columna] = base[columna]
+    nombre = senuelo.get("nombre", "")
+    columnas_nombre = [c for c in fila if es_nombre(c)]
+    for columna in columnas_nombre or ["Nombre Cliente"]:
+        fila[columna] = nombre
+    # Con link del mensaje, el señuelo recibe el mismo que los clientes; si no, el suyo.
+    link_senuelo = (link or "").strip() or str(senuelo.get("link") or "").strip()
+    if link_senuelo:
+        columna_link = next((c for c in fila if clave(c) == "link"), "Link")
+        fila[columna_link] = link_senuelo
+    fila[phone_column or "telefono"] = str(senuelo.get("telefono") or "").strip()
+    return fila
+
+
+def items_vista_previa(prepared: List[Dict], limit: int = 3) -> List[Dict]:
+    """
+    Mensajes para la vista previa: primero clientes y, si hay, un señuelo al
+    final (marcado), para revisar los dos casos.
+    """
+    clientes = [i for i in prepared if not i.get("senuelo")]
+    senuelos = [i for i in prepared if i.get("senuelo")]
+    elegidos = clientes[:max(1, limit - 1)] + senuelos[:1] if senuelos else clientes[:limit]
+    elegidos = (elegidos + [i for i in prepared if i not in elegidos])[:limit]
+    return [{"telefono": i["phone"], "mensaje": i["text"], "longitud": len(i["text"]),
+             "senuelo": bool(i.get("senuelo"))} for i in elegidos]
+
+
 def preview_sms(rows: List[Dict], plantilla: str, limit: int = 3, link: str = "") -> Dict:
     """Genera una vista previa sin enviar."""
     try:
         prepared, details = preparar_sms(rows, plantilla, link)
 
-        preview_items = []
-        for item in prepared[:limit]:
-            preview_items.append({
-                "telefono": item["phone"],
-                "mensaje": item["text"],
-                "longitud": len(item["text"])
-            })
+        preview_items = items_vista_previa(prepared, limit)
         
         return {
             "success": True,

@@ -10,6 +10,7 @@ from uuid import uuid4
 import pandas as pd
 
 from services.email_client import EmailTimeoutError
+from services.variables import buscar_columna, es_nombre
 
 logger = logging.getLogger(__name__)
 
@@ -45,23 +46,19 @@ def extraer_variables(texto: str) -> List[str]:
     return re.findall(r"{{(.*?)}}", texto)
 
 
-def _clave_variable(nombre) -> str:
-    """Clave para comparar una variable con una columna: sin mayúsculas y con _ en vez de espacios."""
-    return re.sub(r"\s+", "_", str(nombre).strip().lower())
-
-
 def construir_contenido(row: Dict, plantilla: str, si_falta: Optional[str] = "") -> str:
     """
     Reemplaza las {{variables}} con los datos de la fila. Si la fila no trae la
     columna se pone si_falta; con si_falta=None la variable queda tal cual.
     """
-    datos = {_clave_variable(k): v for k, v in row.items()}
+    columnas = list(row.keys())
 
     def reemplazo(m):
-        clave = _clave_variable(m.group(1))
-        if clave not in datos:
+        # Misma comparación que SMS (services/variables.buscar_columna).
+        columna = buscar_columna(m.group(1), columnas)
+        if columna is None:
             return m.group(0) if si_falta is None else si_falta
-        valor = datos[clave]
+        valor = row[columna]
         return "" if valor is None else str(valor)
 
     return re.sub(r"{{\s*([^{}]+?)\s*}}", reemplazo, plantilla or "")
@@ -81,12 +78,12 @@ def vista_previa_email(rows: List[Dict], plantilla: str, asunto: str, email_colu
     variables = variables_de_plantilla(plantilla, asunto)
     items = []
     for row in rows[:limite]:
-        datos = {_clave_variable(k): v for k, v in row.items()}
+        columnas = {v: buscar_columna(v, row.keys()) for v in variables}
         items.append({
             "email": str(row.get(email_column) or "").strip(),
             "asunto": construir_contenido(row, asunto, si_falta=None) if asunto else "(Sin asunto)",
             "contenido": construir_contenido(row, plantilla, si_falta=None),
-            "vacias": [v for v in variables if _clave_variable(v) in datos and _vacio(datos[_clave_variable(v)])],
+            "vacias": [v for v, c in columnas.items() if c is not None and _vacio(row[c])],
         })
     return items
 
@@ -166,25 +163,14 @@ def guardar_email_log(client, registros: List[Dict]) -> None:
         logger.error(f"Error guardando logs: {e}")
 
 def traducir_a_member(html: str, mapeo: Dict[str, int]) -> str:
-    import re
-    
+    """{{variable}} -> %Member:CustomFieldN% (el campo que da campo_de)."""
     resultado = html
     variables = re.findall(r"{{\s*([^{}]+?)\s*}}", html)
-    
+
     for var in variables:
         var_original = var.strip()
-        var_lower = var_original.lower()
-        var_guion = var_lower.replace(" ", "_")
-        var_sin_espacios = var_lower.replace(" ", "")
-        
-        campo_id = None
-        if var_lower in mapeo:
-            campo_id = mapeo[var_lower]
-        elif var_guion in mapeo:
-            campo_id = mapeo[var_guion]
-        elif var_sin_espacios in mapeo:
-            campo_id = mapeo[var_sin_espacios]
-        
+        campo_id = campo_de(var_original, mapeo)
+
         if campo_id:
             resultado = re.sub(
                 r"{{\s*" + re.escape(var_original) + r"\s*}}",
@@ -194,7 +180,7 @@ def traducir_a_member(html: str, mapeo: Dict[str, int]) -> str:
             )
             logger.info(f"✅ Mapeado: '{var_original}' → CustomField{campo_id}")
         else:
-            logger.warning(f"⚠️ Variable sin mapeo: '{var_original}' (buscada como: {var_lower}, {var_guion}, {var_sin_espacios})")
+            logger.warning(f"⚠️ Variable sin campo personalizado: '{var_original}'")
     
     return resultado
 
@@ -218,15 +204,16 @@ def validar_variables_plantilla(rows: List[Dict], plantilla: str, asunto: str = 
             "variables_encontradas": []
         }
     
-    # Columnas disponibles en la primera fila
-    columnas_disponibles = {_clave_variable(k) for k in rows[0].keys()}
-    
+    # Columnas disponibles en la primera fila (misma comparación que SMS:
+    # services/variables.buscar_columna, con los alias del nombre).
+    columnas_disponibles = list(rows[0].keys())
+
     # Verificar cada variable
     faltantes = []
     encontradas = []
-    
+
     for var in todas_vars:
-        if _clave_variable(var) in columnas_disponibles:
+        if buscar_columna(var, columnas_disponibles) is not None:
             encontradas.append(var)
         else:
             faltantes.append(var)
@@ -306,10 +293,18 @@ def construir_mapeo_campos(email_config: Dict, campos_api: List[Dict]) -> Dict[s
 
 
 def campo_de(nombre: str, mapeo: Dict[str, int]) -> Optional[int]:
-    """CustomField de una columna o variable (sin importar mayúsculas, espacios o guiones bajos)."""
+    """
+    CustomField de una columna o variable (sin importar mayúsculas, espacios o
+    guiones bajos). El nombre del cliente (nombre, Nombre Cliente,
+    customer_name...) va al campo de "nombre" si no tiene uno propio.
+    """
     for variante in _variantes(nombre):
         if variante in mapeo:
             return mapeo[variante]
+    if es_nombre(nombre):
+        for alias in ("nombre", "customer_name", "nombre_cliente"):
+            if alias in mapeo:
+                return mapeo[alias]
     return None
 
 
@@ -325,11 +320,6 @@ def _emails_en_tabla(client_bq, sql: str, emails: List[str], extra_params=None) 
     config = bigquery.QueryJobConfig(query_parameters=[
         bigquery.ArrayQueryParameter("emails", "STRING", emails), *(extra_params or [])])
     return {str(r["email"]).strip().lower() for r in client_bq.query(sql, job_config=config).result()}
-
-
-# Columnas de la consulta que llevan el nombre del cliente: en la fila de un señuelo
-# van con el nombre del señuelo.
-COLUMNAS_NOMBRE = ("nombre", "customer_name", "nombre_cliente", "nombre_completo", "name")
 
 
 def senuelos_email(email_config: Dict) -> List[Dict]:
@@ -353,16 +343,16 @@ def senuelos_email(email_config: Dict) -> List[Dict]:
 def filas_senuelos(base: Dict, email_column: str, senuelos: List[Dict]) -> List[Dict]:
     """
     Una fila por señuelo, copiada de la fila base (un cliente real, para que las
-    variables de la plantilla tengan datos), con el email y el nombre del señuelo.
+    variables de la plantilla tengan datos), con el email y el nombre del señuelo
+    en las columnas de nombre (services/variables.es_nombre).
     """
-    columnas_nombre = {_clave_variable(c) for c in COLUMNAS_NOMBRE}
     filas = []
     for s in senuelos:
         fila = dict(base)
         fila[email_column] = s["email"]
         if s["nombre"]:
             for columna in fila:
-                if _clave_variable(columna) in columnas_nombre:
+                if es_nombre(columna):
                     fila[columna] = s["nombre"]
         filas.append(fila)
     return filas

@@ -604,7 +604,8 @@ def sms_validar():
         # Los señuelos nunca se excluyen (ni por lista negra ni por duplicados).
         allowed, n_bloqueados, n_duplicados = filtrar_permitidos(prepared, blocked, duplicates, allow_resend)
 
-        preview_mensajes = [{"telefono": item["phone"], "mensaje": item["text"], "longitud": len(item["text"])} for item in allowed[:3]]
+        from services.sms_service import items_vista_previa
+        preview_mensajes = items_vista_previa(allowed, 3)
 
         return jsonify({
             "success": True,

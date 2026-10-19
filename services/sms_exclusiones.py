@@ -14,6 +14,8 @@ Sin Flask ni base de datos: funciones puras sobre las filas.
 
 import re
 
+from services.variables import clave
+
 # Entidad_principal marcadas NO por el equipo de SMS (07/10/2026).
 ENTIDADES_EXCLUIDAS = (
     "COOPCENTRAL", "GIROS Y FINANZAS", "GIROS Y FINANZAS2", "GRUPO SOL",
@@ -51,19 +53,23 @@ def _vacio(valor) -> bool:
 
 
 def motivo_exclusion(fila: dict, variables_usadas) -> str:
-    """Primera regla que excluye la fila ('' si se envía)."""
-    usadas = {str(v).strip().lower() for v in variables_usadas}
-    por_nombre = {str(k).strip().lower(): v for k, v in fila.items()}
+    """
+    Primera regla que excluye la fila ('' si se envía). Variables y columnas se
+    comparan como en el mensaje (services/variables.clave): sin mayúsculas,
+    tildes, espacios ni _ ({{fecha_de_pago}} = columna "Fecha de Pago").
+    """
+    usadas = {clave(v) for v in variables_usadas}
+    por_nombre = {clave(k): v for k, v in fila.items()}
 
-    if "nombre banco" in usadas:
-        entidad = por_nombre.get("entidad_principal")
+    if clave("nombre banco") in usadas:
+        entidad = por_nombre.get(clave("entidad_principal"))
         if _vacio(entidad):
-            entidad = por_nombre.get("nombre banco")
+            entidad = por_nombre.get(clave("nombre banco"))
         if banco_excluido(entidad):
             return REGLA_BANCO
 
     for regla, variables in VARIABLES_OBLIGATORIAS.items():
-        if any(v in usadas and _vacio(por_nombre.get(v)) for v in variables):
+        if any(clave(v) in usadas and _vacio(por_nombre.get(clave(v))) for v in variables):
             return regla
     return ""
 
