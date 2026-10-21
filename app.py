@@ -8,6 +8,10 @@ import io
 # la carpeta no es la de esta copia o el puerto es 5000, termina aquí.
 from modo_prueba import proteger_arranque_copia_prueba
 proteger_arranque_copia_prueba(__file__)
+# Una sola app por carpeta (instancia_unica.py): dos a la vez duplican las
+# programaciones y bloquean app_log.txt. También antes de importar backend.
+from instancia_unica import proteger_instancia_unica
+proteger_instancia_unica(__file__)
 
 import json
 import os

@@ -34,3 +34,6 @@ uploads/
 bulk_ids_registrados.txt
 dashboard_cache.json
 
+
+# Candado de una sola app por carpeta (instancia_unica.py)
+app.lock
