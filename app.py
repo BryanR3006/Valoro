@@ -41,6 +41,20 @@ PROJECT_ID = "capable-arbor-209819"
 bq_client = None
 
 
+# ==================== USUARIOS (login, perfiles y registro de acciones) ====================
+# La guardia (before_request) exige sesión y revisa el perfil en todas las rutas
+# desde un solo lugar (ver usuarios.py). Los usuarios se comparten entre PC por
+# BigQuery (usuarios_bq.py): al arrancar y cada minuto.
+import usuarios
+import usuarios_bq
+from registro_logs import usuario_sesion
+usuarios.instalar(app)
+scheduler.add_job(usuarios_bq.sincronizar, trigger=DateTrigger(run_date=datetime.now(COLOMBIA_TZ) + timedelta(seconds=3)),
+                  args=[app, "arranque"], id="usuarios_sync_arranque", replace_existing=True)
+scheduler.add_job(usuarios_bq.sincronizar, trigger=IntervalTrigger(seconds=60), args=[app], id="usuarios_sync",
+                  replace_existing=True, max_instances=1, coalesce=True)
+
+
 #==================== CONFIGURACIÓN DE LOGS ====================
 # logger_sms escribe en logs/sms.log y logger_email en logs/email.log (ver backend.py).
 
@@ -540,7 +554,8 @@ def sms_send():
     query = (data.get("query") or "").strip()
     plantilla = (data.get("plantilla") or "").strip()
     campaign = (data.get("campana") or "").strip()
-    usuario = (data.get("usuario") or "").strip()
+    # Quien envía/programa = el usuario con sesión (registro de acciones y logs); el campo del formulario queda de respaldo.
+    usuario = usuario_sesion() or (data.get("usuario") or "").strip()
     allow_resend = bool(data.get("confirmar_reenvio", False))
 
     faltan = _faltantes_sms(data)
@@ -931,7 +946,8 @@ def sms_programar_simple():
     query = (data.get("query") or "").strip()
     plantilla = (data.get("plantilla") or "").strip()
     campana = (data.get("campana") or "").strip()
-    usuario = (data.get("usuario") or "").strip()
+    # Quien envía/programa = el usuario con sesión (registro de acciones y logs); el campo del formulario queda de respaldo.
+    usuario = usuario_sesion() or (data.get("usuario") or "").strip()
     allow_resend = bool(data.get("confirmar_reenvio", False))
     fecha_programada = (data.get("fecha_programada") or "").strip()
 
@@ -1020,7 +1036,8 @@ def sms_programar_recurrente():
     query = (data.get("query") or "").strip()
     plantilla = (data.get("plantilla") or "").strip()
     campana = (data.get("campana") or "").strip()
-    usuario = (data.get("usuario") or "").strip()
+    # Quien envía/programa = el usuario con sesión (registro de acciones y logs); el campo del formulario queda de respaldo.
+    usuario = usuario_sesion() or (data.get("usuario") or "").strip()
     allow_resend = bool(data.get("confirmar_reenvio", False))
     hora_inicio = (data.get("hora_inicio") or "").strip()
     fecha_fin = (data.get("fecha_fin") or "").strip() or None
@@ -1424,7 +1441,8 @@ def email_send():
     plantilla = (data.get("plantilla") or "").strip()
     asunto = (data.get("asunto") or "").strip()
     campana_nombre = (data.get("campana") or "").strip()
-    usuario = (data.get("usuario") or "").strip()
+    # Quien envía/programa = el usuario con sesión (registro de acciones y logs); el campo del formulario queda de respaldo.
+    usuario = usuario_sesion() or (data.get("usuario") or "").strip()
     reply_email = (data.get("reply_email") or "").strip()
     confirmar_reenvio = data.get("confirmar_reenvio", False)
 
@@ -1515,7 +1533,8 @@ def email_schedule():
     plantilla = (data.get("plantilla") or "").strip()
     asunto = (data.get("asunto") or "").strip()
     campana_nombre = (data.get("campana") or "").strip()
-    usuario = (data.get("usuario") or "").strip()
+    # Quien envía/programa = el usuario con sesión (registro de acciones y logs); el campo del formulario queda de respaldo.
+    usuario = usuario_sesion() or (data.get("usuario") or "").strip()
     reply_email = (data.get("reply_email") or "").strip()
 
     faltan = _faltantes_email(data, con_fecha=True)
@@ -1976,7 +1995,7 @@ def _leer_plantilla_formulario():
     asunto = str(data.get("asunto") or "").strip()
     html = str(data.get("html") or "").strip()
     momento = str(data.get("momento") or "").strip() or None
-    usuario = str(data.get("usuario") or "").strip() or None
+    usuario = usuario_sesion() or str(data.get("usuario") or "").strip() or None
     return nombre, asunto, html, momento, usuario, errores_plantilla(nombre, asunto, html)
 
 
@@ -2052,7 +2071,7 @@ def email_plantillas_duplicar(plantilla_id):
     original = db.session.get(PlantillaEmail, plantilla_id)
     if not original:
         return jsonify({"success": False, "message": "Plantilla no encontrada."}), 404
-    usuario = str((request.get_json(silent=True) or {}).get("usuario") or "").strip() or original.usuario
+    usuario = usuario_sesion() or str((request.get_json(silent=True) or {}).get("usuario") or "").strip() or original.usuario
     copia = PlantillaEmail(nombre=nombre_libre(original.nombre, _nombres_plantillas(), "copia "),
                            momento=original.momento, asunto=original.asunto, html=original.html, usuario=usuario, activa=True)
     db.session.add(copia)

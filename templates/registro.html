@@ -1,0 +1,88 @@
+{% extends "layouts/adminlte.html" %}
+{% block title %}Registro{% endblock %}
+{% block page_title %}<h1>Registro de acciones</h1>{% endblock %}
+{% block page_subtitle %}<small class="text-muted">Cada envío, programación, cambio, descarga e ingreso: quién, cuándo, canal, campaña, registros y resultado.</small>{% endblock %}
+
+{% block extra_css %}
+<style>
+  .rg-filtros { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+  .rg-filtros .form-group { margin: 0; min-width: 150px; }
+  .rg-tabla td { vertical-align: top; }
+  .rg-resultado { max-width: 360px; white-space: normal; word-break: break-word; }
+  .rg-ruta { font-family: monospace; font-size: .75rem; color: var(--text-secondary); }
+  .rg-paginas { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 12px; }
+  .small { font-size: .82rem; }
+  .text-nowrap { white-space: nowrap; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% include "_avisos.html" %}
+
+<div class="card">
+  <div class="card-body">
+    <form method="get" action="/registro" class="rg-filtros">
+      <div class="form-group">
+        <label for="rgUsuario">Usuario</label>
+        <select id="rgUsuario" name="usuario" class="form-control form-control-sm">
+          <option value="">Todos</option>
+          {% for u in usuarios %}<option value="{{ u }}" {% if u == filtros.usuario %}selected{% endif %}>{{ u }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="rgCanal">Canal</label>
+        <select id="rgCanal" name="canal" class="form-control form-control-sm">
+          <option value="">Todos</option>
+          {% for c in canales %}<option value="{{ c }}" {% if c == filtros.canal %}selected{% endif %}>{{ c }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="rgDesde">Desde</label>
+        <input id="rgDesde" name="desde" type="date" class="form-control form-control-sm" value="{{ filtros.desde }}">
+      </div>
+      <div class="form-group">
+        <label for="rgHasta">Hasta</label>
+        <input id="rgHasta" name="hasta" type="date" class="form-control form-control-sm" value="{{ filtros.hasta }}">
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-filter"></i> Filtrar</button>
+      <a href="/registro" class="btn btn-outline-secondary btn-sm">Limpiar</a>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3><i class="fas fa-list"></i> {{ total }} acciones</h3></div>
+  <div class="card-body table-responsive">
+    <table class="table table-sm mb-0 rg-tabla">
+      <thead>
+        <tr><th>Fecha</th><th>Usuario</th><th>Canal</th><th>Acción</th><th>Campaña</th><th class="text-right">Registros</th><th>Resultado</th></tr>
+      </thead>
+      <tbody>
+      {% for r in filas %}
+        <tr>
+          <td class="text-nowrap small">{{ r.fecha.strftime('%Y-%m-%d %H:%M:%S') if r.fecha else '' }}</td>
+          <td>{{ r.usuario }}<br><small class="text-muted">{{ r.perfil }}</small></td>
+          <td><span class="badge badge-secondary">{{ r.canal }}</span></td>
+          <td>{{ r.accion }}{% if r.accion != r.metodo ~ ' ' ~ r.ruta %}<br><span class="rg-ruta">{{ r.metodo }} {{ r.ruta }}</span>{% endif %}</td>
+          <td>{{ r.campana or '' }}</td>
+          <td class="text-right">{{ r.registros if r.registros is not none else '' }}</td>
+          <td class="rg-resultado">
+            <span class="badge {{ 'badge-success' if (r.resultado or '').startswith('ok') else 'badge-danger' }}">{{ r.estado_http or '' }}</span>
+            <span class="small">{{ r.resultado or '' }}</span>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="text-center text-muted" style="padding:30px;">No hay acciones con estos filtros.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if paginas > 1 %}
+    <div class="rg-paginas">
+      {% if pagina > 1 %}<a class="btn btn-outline-secondary btn-sm" href="/registro?{{ query_pagina(pagina - 1) }}">‹ Anterior</a>{% endif %}
+      <span class="small text-muted">Página {{ pagina }} de {{ paginas }}</span>
+      {% if pagina < paginas %}<a class="btn btn-outline-secondary btn-sm" href="/registro?{{ query_pagina(pagina + 1) }}">Siguiente ›</a>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

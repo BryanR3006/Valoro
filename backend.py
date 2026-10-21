@@ -1,6 +1,7 @@
 import json
 import logging
 from logging.handlers import RotatingFileHandler
+import os
 import shutil
 import threading
 from collections import deque
@@ -249,9 +250,33 @@ logger_sms = logging.getLogger("sms")
 logger_email = logging.getLogger("email")
 
 
+def _clave_sesiones():
+    """
+    Clave para firmar las sesiones (login): variable de entorno SECRET_KEY o
+    "secret_key" de config.json. Si no hay, se genera una al azar y cada
+    reinicio cierra las sesiones abiertas.
+    """
+    clave = os.environ.get("SECRET_KEY", "").strip()
+    if not clave:
+        try:
+            with CONFIG_FILE.open("r", encoding="utf-8") as f:
+                clave = str(json.load(f).get("secret_key") or "").strip()
+        except Exception:
+            clave = ""
+    if not clave:
+        import secrets
+        clave = secrets.token_hex(32)
+        logger.warning("⚠️ Sin secret_key en config.json ni SECRET_KEY: se usa una clave al azar "
+                       "y las sesiones se cierran en cada reinicio.")
+    return clave
+
+
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
-app.config["SECRET_KEY"] = "change-this-secret-key"
+app.config["SECRET_KEY"] = _clave_sesiones()
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
 app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
 app.config["DOWNLOAD_FOLDER"] = str(DOWNLOAD_FOLDER)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024

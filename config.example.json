@@ -1,4 +1,6 @@
 {
+  "secret_key": "",
+  "usuario_admin_clave": "",
   "general_parameters": {
     "console_message_interval_seconds": 60,
     "log_retention_hours": 72

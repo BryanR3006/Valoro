@@ -1,0 +1,116 @@
+{% extends "layouts/adminlte.html" %}
+{% block title %}Usuarios{% endblock %}
+{% block page_title %}<h1>Usuarios</h1>{% endblock %}
+{% block page_subtitle %}<small class="text-muted">Admin usa todo y administra usuarios. Analítica ve el inicio, las programaciones, los envíos, las plantillas y el dashboard, pero no envía, programa ni configura.</small>{% endblock %}
+
+{% block extra_css %}
+<style>
+  .us-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; align-items: end; }
+  .us-form .form-group { margin: 0; }
+  .us-acciones { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .us-acciones form { display: flex; gap: 4px; align-items: center; margin: 0; }
+  .us-acciones .form-control-sm { width: auto; }
+  .us-clave { width: 130px !important; }
+  .us-inactivo td { opacity: .55; }
+  .small { font-size: .82rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% include "_avisos.html" %}
+
+<div class="card">
+  <div class="card-header"><h3><i class="fas fa-user-plus"></i> Nuevo usuario</h3></div>
+  <div class="card-body">
+    <form method="post" action="/usuarios" class="us-form" autocomplete="off">
+      <input type="hidden" name="accion" value="crear">
+      <div class="form-group">
+        <label for="usUsuario">Usuario</label>
+        <input id="usUsuario" name="usuario" class="form-control" placeholder="ej: nombre@valoro.com.co" maxlength="80"
+               pattern="[a-z0-9._@+\-]{3,80}" title="El correo o un nombre corto: minúsculas, números, punto, guion o @ (3 a 80)" required>
+      </div>
+      <div class="form-group">
+        <label for="usNombre">Nombre</label>
+        <input id="usNombre" name="nombre" class="form-control" placeholder="ej: Camilo Pérez" maxlength="100" required>
+      </div>
+      <div class="form-group">
+        <label for="usPerfil">Perfil</label>
+        <select id="usPerfil" name="perfil" class="form-control">
+          {% for clave, nombre in perfiles.items() %}<option value="{{ clave }}">{{ nombre }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="usClave">Clave <small class="text-muted">(mín. {{ largo_minimo }})</small></label>
+        <input id="usClave" name="clave" type="password" class="form-control" minlength="{{ largo_minimo }}"
+               autocomplete="new-password" required>
+      </div>
+      <div class="form-group">
+        <label for="usClave2">Repite la clave</label>
+        <input id="usClave2" name="clave2" type="password" class="form-control" minlength="{{ largo_minimo }}"
+               autocomplete="new-password" required>
+      </div>
+      <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Crear</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3><i class="fas fa-users"></i> Usuarios ({{ usuarios|length }})</h3></div>
+  <div class="card-body table-responsive">
+    <table class="table table-sm mb-0">
+      <thead>
+        <tr><th>Usuario</th><th>Nombre</th><th>Perfil</th><th>Estado</th><th>Último ingreso</th><th>Acciones</th></tr>
+      </thead>
+      <tbody>
+      {% for u in usuarios %}
+        {% set yo = u.id == usuario_actual.id %}
+        <tr class="{{ '' if u.activo else 'us-inactivo' }}">
+          <td><strong>{{ u.usuario }}</strong>{% if yo %} <span class="badge badge-info">tú</span>{% endif %}</td>
+          <td>{{ u.nombre }}</td>
+          <td><span class="badge {{ 'badge-primary' if u.perfil == 'admin' else 'badge-info' if u.perfil == 'analitica' else 'badge-secondary' }}">{{ perfiles.get(u.perfil, u.perfil) }}</span></td>
+          <td>
+            {% if u.activo %}<span class="badge badge-success">Activo</span>{% else %}<span class="badge badge-danger">Inactivo</span>{% endif %}
+            {% if u.debe_cambiar_clave %}<br><span class="badge badge-warning">Debe cambiar clave</span>{% endif %}
+          </td>
+          <td class="small">{{ u.ultimo_ingreso.strftime('%Y-%m-%d %H:%M') if u.ultimo_ingreso else '—' }}</td>
+          <td>
+            <div class="us-acciones">
+              {% if not yo %}
+              <form method="post" action="/usuarios">
+                <input type="hidden" name="accion" value="perfil"><input type="hidden" name="id" value="{{ u.id }}">
+                <select name="perfil" class="form-control form-control-sm" aria-label="Perfil de {{ u.usuario }}">
+                  {% for clave, nombre in perfiles.items() %}<option value="{{ clave }}" {% if clave == u.perfil %}selected{% endif %}>{{ nombre }}</option>{% endfor %}
+                </select>
+                <button class="btn btn-outline-secondary btn-sm" type="submit">Cambiar</button>
+              </form>
+              {% endif %}
+              <form method="post" action="/usuarios" autocomplete="off">
+                <input type="hidden" name="accion" value="clave"><input type="hidden" name="id" value="{{ u.id }}">
+                <input name="clave" type="password" class="form-control form-control-sm us-clave" placeholder="Clave nueva"
+                       minlength="{{ largo_minimo }}" autocomplete="new-password" required aria-label="Clave nueva de {{ u.usuario }}">
+                <input name="clave2" type="password" class="form-control form-control-sm us-clave" placeholder="Repetir"
+                       minlength="{{ largo_minimo }}" autocomplete="new-password" required aria-label="Repetir clave de {{ u.usuario }}">
+                <button class="btn btn-outline-secondary btn-sm" type="submit"><i class="fas fa-key"></i> Poner clave</button>
+              </form>
+              {% if not yo %}
+              <form method="post" action="/usuarios">
+                <input type="hidden" name="accion" value="activo"><input type="hidden" name="id" value="{{ u.id }}">
+                <button class="btn btn-sm {{ 'btn-outline-danger' if u.activo else 'btn-outline-primary' }}" type="submit">
+                  {{ 'Desactivar' if u.activo else 'Activar' }}</button>
+              </form>
+              <form method="post" action="/usuarios" onsubmit="return confirm('¿Eliminar el usuario {{ u.usuario }}? Su historial en Registro se conserva.');">
+                <input type="hidden" name="accion" value="eliminar"><input type="hidden" name="id" value="{{ u.id }}">
+                <button class="btn btn-outline-danger btn-sm" type="submit"><i class="fas fa-trash"></i> Eliminar</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="text-muted small mt-3 mb-0">Al poner la clave de otra persona, esa persona debe cambiarla en su próximo ingreso.
+      Debe quedar siempre al menos un usuario Admin activo.</p>
+  </div>
+</div>
+{% endblock %}

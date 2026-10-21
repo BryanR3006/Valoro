@@ -47,6 +47,13 @@ def _ensure_programacion_sms_columns():
     })
 
 
+def _ensure_usuarios_columns():
+    """Columnas nuevas de usuarios (login, usuarios.py)."""
+    _agregar_columnas("usuarios", {
+        "actualizado": "DATETIME",
+    })
+
+
 def _ensure_programacion_email_columns():
     """Columnas de horario de programaciones_email (recurrente igual que SMS)."""
     _agregar_columnas("programaciones_email", {
@@ -104,6 +111,7 @@ def init_db(app):
         db.create_all()
         _ensure_programacion_sms_columns()
         _ensure_programacion_email_columns()
+        _ensure_usuarios_columns()
         _ensure_momento_columns()
         _avisar_columnas_faltantes()
 
@@ -254,6 +262,52 @@ class ProgramacionEmail(db.Model):
             "fecha_creacion": fecha(self.fecha_creacion),
             "fecha_actualizacion": fecha(self.fecha_actualizacion),
         }
+
+
+class Usuario(db.Model):
+    """
+    Usuario de la aplicación (login). Perfiles en usuarios.py:
+    'admin' usa todo; 'analitica' ve todo sin enviar, programar, editar
+    plantillas ni configurar. La clave se guarda con
+    generate_password_hash, nunca en texto plano.
+    """
+    __tablename__ = 'usuarios'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    usuario = db.Column(db.String(80), unique=True, nullable=False)  # en minúsculas (correo o nombre corto)
+    nombre = db.Column(db.String(100), nullable=False, default='')
+    clave_hash = db.Column(db.String(255), nullable=False)
+    perfil = db.Column(db.String(20), nullable=False, default='analitica')
+    activo = db.Column(db.Boolean, nullable=False, default=True)
+    # True: al ingresar solo puede ir a /cambiar-clave (usuario admin sembrado,
+    # o clave puesta por otra persona desde /usuarios).
+    debe_cambiar_clave = db.Column(db.Boolean, nullable=False, default=False)
+    fecha_creacion = db.Column(db.DateTime, default=_ahora_colombia)
+    ultimo_ingreso = db.Column(db.DateTime, nullable=True)
+    # Último cambio real (crear, perfil, activo, clave): decide qué copia gana al
+    # sincronizar con BigQuery (usuarios_bq.py). None = nunca cambió en este PC.
+    actualizado = db.Column(db.DateTime, nullable=True)
+
+
+class RegistroAccion(db.Model):
+    """
+    Lo que hace cada usuario (todo lo que no es GET, descargas e ingresos).
+    Nunca guarda el cuerpo de la petición, teléfonos, correos ni claves.
+    """
+    __tablename__ = 'registro_acciones'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    fecha = db.Column(db.DateTime, default=_ahora_colombia, nullable=False, index=True)
+    usuario = db.Column(db.String(80), nullable=False, default='', index=True)
+    perfil = db.Column(db.String(20), nullable=False, default='')
+    metodo = db.Column(db.String(10), nullable=False, default='')
+    ruta = db.Column(db.String(255), nullable=False, default='')
+    canal = db.Column(db.String(20), nullable=False, default='otro', index=True)
+    accion = db.Column(db.String(300), nullable=False, default='')
+    campana = db.Column(db.String(200), nullable=True)
+    registros = db.Column(db.Integer, nullable=True)
+    estado_http = db.Column(db.Integer, nullable=True)
+    resultado = db.Column(db.String(320), nullable=True)
 
 
 class EjecucionProgramacion(db.Model):

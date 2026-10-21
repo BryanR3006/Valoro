@@ -1,0 +1,4 @@
+{# Mensajes de flash (ok / error) de las páginas de Administración (usuarios y registro). #}
+{% for tipo, texto in mensajes %}
+<div class="alert {{ 'alert-success' if tipo == 'ok' else 'alert-danger' }}">{{ texto }}</div>
+{% endfor %}

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ingresar | {{ app_nombre }}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.2/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/valoro.css') }}">
+    <style>
+        /* Login de Valoro (igual que el de Omnic): marca a la izquierda con la intro
+           del logo, acceso a la derecha. Bajo 900 px queda una sola columna con la marca arriba. */
+        body { min-height: 100vh; margin: 0; background: var(--valoro-claro-2, #fbfdf9); }
+        .login { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(380px, 1fr); }
+
+        .marca { position: relative; overflow: hidden; background: var(--grad-oscuro); color: #fff;
+                 display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 30px;
+                 padding: 48px 32px; text-align: center; }
+        /* Ondas suaves con los colores de marca, solo decoración de fondo. */
+        .marca::before, .marca::after { content: ""; position: absolute; border-radius: 50%; pointer-events: none; }
+        .marca::before { width: 720px; height: 720px; left: -260px; bottom: -420px; border: 2px solid rgba(173, 255, 0, 0.14);
+                         box-shadow: 0 0 0 60px rgba(173, 255, 0, 0.04), 0 0 0 120px rgba(249, 196, 0, 0.03); }
+        .marca::after { width: 380px; height: 380px; right: -150px; top: -170px; border: 2px solid rgba(249, 196, 0, 0.2); }
+
+        /* Intro: el logo entra, salen tres ondas (lima, verde y oro) y aparece el lema. */
+        .intro { position: relative; width: min(80%, 460px); display: grid; place-items: center; }
+        .intro img { width: 100%; height: auto; position: relative; z-index: 1;
+                     animation: logoEntra 1.1s cubic-bezier(.2, .8, .2, 1) .3s both; }
+        .intro .onda { position: absolute; width: 46%; aspect-ratio: 1; border-radius: 50%; border: 3px solid var(--valoro-lima);
+                       opacity: 0; animation: onda 1.4s ease-out both; }
+        .intro .onda:nth-of-type(1) { animation-delay: 1.2s; }
+        .intro .onda:nth-of-type(2) { border-color: #3a961f; animation-delay: 1.38s; }
+        .intro .onda:nth-of-type(3) { border-color: var(--valoro-oro); animation-delay: 1.56s; }
+        @keyframes logoEntra { from { opacity: 0; transform: scale(.86) translateY(10px); filter: blur(6px); }
+                               to { opacity: 1; transform: none; filter: none; } }
+        @keyframes onda { 0% { opacity: .9; transform: scale(.6); } 100% { opacity: 0; transform: scale(2.4); } }
+
+        .marca .lema { position: relative; display: grid; gap: 8px; max-width: 460px;
+                       opacity: 0; transform: translateY(8px); transition: opacity .6s ease, transform .6s ease; }
+        .marca .lema h1 { margin: 0; font-size: 1.6rem; line-height: 1.25; font-weight: 800; color: #fff; }
+        .marca .lema p { margin: 0; color: #c9d9cc; font-size: 0.98rem; }
+        .canales { position: relative; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 520px; }
+        .canales span { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px;
+                        border-radius: 999px; font-size: 0.8rem; font-weight: 700; color: var(--valoro-lima);
+                        background: rgba(173, 255, 0, 0.1); border: 1px solid rgba(173, 255, 0, 0.18); }
+        .canales i { font-size: 12px; }
+        /* Los canales aparecen uno a uno cuando termina la intro. */
+        .canales span { opacity: 0; transform: translateY(6px); transition: opacity .45s ease, transform .45s ease; }
+        .listo .lema, .listo .canales span { opacity: 1; transform: none; }
+        .listo .canales span:nth-child(2) { transition-delay: 80ms; } .listo .canales span:nth-child(3) { transition-delay: 160ms; }
+        .listo .canales span:nth-child(4) { transition-delay: 240ms; } .listo .canales span:nth-child(5) { transition-delay: 320ms; }
+
+        .acceso { display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 48px 24px; gap: 24px; }
+        .caja { width: 100%; max-width: 380px; display: grid; gap: 24px; }
+        .caja .titulo h2 { margin: 0; font-size: 1.6rem; line-height: 1.25; font-weight: 800; color: var(--text-primary); }
+        .caja .titulo p { margin: 4px 0 0; color: var(--text-secondary); }
+        .caja form { display: grid; gap: 16px; }
+        .caja .form-group { margin: 0; }
+        .caja .form-control { height: 46px; }
+        .caja .btn { width: 100%; height: 46px; font-size: 1rem; justify-content: center; }
+        .caja .alert { margin: 0; display: flex; gap: 10px; align-items: flex-start; }
+        .clave-campo { position: relative; }
+        .clave-campo .form-control { padding-right: 44px; }
+        .clave-campo button { position: absolute; right: 5px; top: 5px; width: 36px; height: 36px; border: 0; background: none;
+                              color: var(--text-secondary); border-radius: 8px; cursor: pointer; }
+        .clave-campo button:hover { color: var(--text-primary); background: var(--valoro-claro, #f1f7ec); }
+        .login-codigo { font-family: 'Consolas', monospace; font-size: 0.78rem; background: rgba(0, 0, 0, 0.05); border-radius: 6px;
+                        padding: 4px 8px; display: block; margin-top: 4px; word-break: break-all; }
+        .pie { color: var(--text-secondary); font-size: 0.75rem; }
+
+        /* Sin animación (movimiento reducido): todo visible desde el inicio. */
+        @media (prefers-reduced-motion: reduce) {
+            .intro img, .intro .onda { animation: none; }
+            .intro .onda { display: none; }
+            .marca .lema, .canales span { opacity: 1; transform: none; transition: none; }
+        }
+        @media (max-width: 900px) {
+            .login { grid-template-columns: 1fr; }
+            .marca { padding: 32px 16px; gap: 16px; }
+            .marca .lema, .canales { display: none; }
+            .intro { width: min(70%, 300px); }
+            .acceso { padding: 32px 16px; justify-content: flex-start; }
+        }
+    </style>
+</head>
+<body>
+<main class="login" id="login">
+    <section class="marca" aria-label="{{ app_nombre }}">
+        <div class="intro" id="intro">
+            <span class="onda"></span><span class="onda"></span><span class="onda"></span>
+            <img src="{{ url_for('static', filename='img/logo-valoro.png') }}" alt="{{ app_nombre }} · El futuro es tuyo">
+        </div>
+        <div class="lema">
+            <h1>Plataforma de mensajería de {{ app_nombre }}</h1>
+            <p>SMS, email, programaciones y reportes en un solo lugar.</p>
+        </div>
+        <div class="canales" aria-hidden="true">
+            <span><i class="fas fa-sms"></i>SMS</span>
+            <span><i class="fas fa-envelope"></i>Email</span>
+            <span><i class="fas fa-calendar-alt"></i>Programaciones</span>
+            <span><i class="fas fa-paper-plane"></i>Envíos</span>
+            <span><i class="fas fa-chart-pie"></i>Dashboard</span>
+        </div>
+    </section>
+
+    <section class="acceso">
+        <div class="caja">
+            <div class="titulo">
+                <h2>Ingresar</h2>
+                <p>Usa tu usuario y clave de {{ app_nombre }}.</p>
+            </div>
+            {% if sin_usuarios %}
+            <div class="alert alert-warning"><i class="fas fa-triangle-exclamation"></i><div>
+                Todavía no hay usuarios. En la carpeta de la aplicación ejecuta:
+                <code class="login-codigo">python usuarios.py crear &lt;usuario&gt; "&lt;Nombre&gt;" admin</code>
+                Luego ingresa aquí con ese usuario.
+            </div></div>
+            {% endif %}
+            {% if error %}
+            <div class="alert alert-danger" role="alert"><i class="fas fa-circle-exclamation"></i><div>{{ error }}</div></div>
+            {% endif %}
+            <form method="post" action="/login" autocomplete="on">
+                <input type="hidden" name="next" value="{{ siguiente }}">
+                <div class="form-group">
+                    <label for="usuario">Usuario</label>
+                    <input id="usuario" name="usuario" class="form-control" value="{{ nombre_usuario }}"
+                           autocomplete="username" autocapitalize="none" required autofocus>
+                </div>
+                <div class="form-group">
+                    <label for="clave">Clave</label>
+                    <div class="clave-campo">
+                        <input id="clave" name="clave" type="password" class="form-control"
+                               autocomplete="current-password" required>
+                        <button type="button" id="verClave" aria-label="Mostrar la clave" title="Mostrar la clave"><i class="fas fa-eye"></i></button>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-right-to-bracket"></i> Ingresar</button>
+            </form>
+        </div>
+        <div class="pie">{{ app_nombre }} · El futuro es tuyo</div>
+    </section>
+</main>
+
+<script>
+// Mostrar u ocultar la clave.
+(function () {
+    const b = document.getElementById('verClave'), c = document.getElementById('clave');
+    b.addEventListener('click', function () {
+        const ver = c.type === 'password';
+        c.type = ver ? 'text' : 'password';
+        b.innerHTML = ver ? '<i class="fas fa-eye-slash"></i>' : '<i class="fas fa-eye"></i>';
+        b.setAttribute('aria-label', ver ? 'Ocultar la clave' : 'Mostrar la clave');
+        c.focus();
+    });
+})();
+// Cuando termina la intro del logo aparecen el lema y los canales (con movimiento reducido, de una vez).
+(function () {
+    const raiz = document.getElementById('login');
+    const listo = () => raiz.classList.add('listo');
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) { listo(); return; }
+    setTimeout(listo, 1600);
+})();
+</script>
+</body>
+</html>

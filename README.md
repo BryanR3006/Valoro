@@ -28,7 +28,10 @@ Llaves de `config.json`:
 
 ```jsonc
 {
-  "general_parameters": {                 // se editan en Configuración > Parámetros generales
+  "secret_key": "",                       // firma las sesiones del login (o variable SECRET_KEY);
+                                          // sin ella se genera una al azar y cada reinicio cierra las sesiones
+  "usuario_admin_clave": "",              // opcional: clave inicial del usuario "admin" (por defecto Admin123)
+  "general_parameters": {                 // se editan en Administración > Parámetros generales
     "console_message_interval_seconds": 60,
     "log_retention_hours": 72
   },
@@ -44,7 +47,10 @@ Llaves de `config.json`:
   "email": {                              // email
     "api_key": "",                        // obligatorio para enviar
     "from_email": "",                     // obligatorio: remitente
-    "from_alias": ""                      // opcional: nombre del remitente (por defecto "Valoro")
+    "from_alias": "",                     // opcional: nombre del remitente (por defecto "Valoro")
+    "max_workers": 5,                     // opcional: contactos que se cargan a la vez (máx. 10)
+    "senuelos": []                        // opcional: correos de control que reciben cada envío
+                                          // [{"email": "...", "nombre": "..."}]
     // "field_mapping": {"columna": id}   // opcional: columna -> campo personalizado de la cuenta
   }
 }
@@ -52,6 +58,34 @@ Llaves de `config.json`:
 
 `config.json`, `config/google_key.json`, `app.db` y los logs están en `.gitignore`.
 Nunca escriba claves en el código.
+
+## Usuarios y perfiles
+
+Todas las páginas piden **ingresar** (`/login`), igual que en Omnic (`usuarios.py`).
+
+- **Admin**: usa todo (enviar y programar SMS y email, plantillas, configuración) y
+  administra los usuarios (*Administración > Usuarios*) y ve el registro de acciones
+  (*Administración > Registro*).
+- **Analítica**: ve el inicio, el historial de programaciones, los envíos, la galería de
+  plantillas y el dashboard SMS, pero no envía, programa, edita plantillas ni configura
+  (esas páginas muestran *Sin permiso* y el servidor rechaza esas acciones).
+
+**Primer ingreso**: al arrancar, si no existe se crea el usuario `admin` (perfil Admin) con la
+clave `usuario_admin_clave` de `config.json` o `Admin123`, y al ingresar obliga a cambiarla.
+Con ese usuario se crean los demás en *Administración > Usuarios* (usuario = el correo).
+Si se pierde el acceso, desde la carpeta de la app:
+
+```bash
+python usuarios.py crear <usuario> "<Nombre>" <admin|analitica>
+python usuarios.py clave <usuario>
+```
+
+- Los usuarios son los mismos en todos los PC: se sincronizan con `Temporal.Valoro_Usuarios`
+  (BigQuery, `usuarios_bq.py`) al arrancar, cada minuto y tras cada cambio. Solo se guarda el
+  hash de la clave.
+- **Registro de acciones**: cada envío, programación, cambio, descarga e ingreso (quién, cuándo,
+  canal, campaña, registros, resultado) en *Administración > Registro* y en `logs/acciones/` y
+  `logs/usuarios/<usuario>/`. Quien envía o programa queda como responsable automáticamente.
 
 ## Páginas
 
@@ -65,7 +99,9 @@ Nunca escriba claves en el código.
 | Email > Enviar Email | `/config-email` | Envío inmediato e historial. |
 | Email > Programaciones email | `/email/programaciones` | Mismo formulario con fecha/hora y tipo; debajo, las programaciones para editar o cancelar. |
 | Email > Plantillas email | `/email/plantillas` | Asunto + HTML guardados, cada uno con su **momento**. |
-| Configuración > Parámetros generales | `/config-general` | Parámetros de `config.json`. |
+| Administración > Usuarios | `/usuarios` | Crear usuarios, cambiar perfil o clave, activar, desactivar y eliminar (solo Admin). |
+| Administración > Registro | `/registro` | Registro de acciones por usuario, canal y fechas (solo Admin). |
+| Administración > Parámetros generales | `/config-general` | Parámetros de `config.json`. |
 
 **Momento del cliente**: las plantillas SMS y de email se asignan a un momento
 (ej. *Mora corta*, *Mora larga*, *Cliente al día*, *Acuerdo de pago*). Es texto libre:
@@ -97,10 +133,12 @@ Si una ejecución programada falla queda en estado **error** con el mensaje del 
 
 - `logs/sms.log` y `logs/email.log`: eventos y errores de cada canal (rotan a los 5 MB).
 - `app_log.txt`: todo lo de la consola. `execution_log.txt`: tareas (lo lee la actividad en vivo de Inicio).
+- `logs/acciones/acciones_AAAA-MM-DD.txt` y `logs/usuarios/<usuario>/AAAA-MM.txt`: lo que hace cada persona (`registro_logs.py`).
 
 ## Tablas en BigQuery
 
 - `Temporal.SmsLog` (cada SMS), `Temporal.SmsInfobip_Valoro` (copia de Infobip para el dashboard), `Temporal.EmailLog`. Esquemas de SMS en `sms_bigquery_schema.sql`.
+- `Temporal.Valoro_Usuarios`: usuarios del login compartidos entre PC (la crea `usuarios_bq.py`). Omnic (QNT) usa otra tabla.
 - Inicio cuenta lo de hoy (hora de Colombia) con `campana` y `fecha_envio` de `SmsLog` y `EmailLog`. Una programación de email "ya corrió" si `EmailLog` tiene envíos de hoy con su mismo nombre de campaña (si dos programaciones usan el mismo nombre, se suman). Las de SMS salen de SQLite (`fecha_ejecucion`, `ultimo_enviados`, `ultimo_error`). No hace falta cambiar tablas de BigQuery.
 - Las programaciones de email están en SQLite (`app.db`, tabla `programaciones_email`), igual que las de SMS: se crean, editan, cancelan y eliminan desde *Email → Programaciones*. BigQuery solo se usa para leer la base de la consulta al enviar. La tabla vieja `Temporal.ProgramacionEmail_Valoro` ya no se usa.
 
@@ -121,4 +159,5 @@ Si una ejecución programada falla queda en estado **error** con el mensaje del 
 | `listas_negras.py` | Tablas de lista negra. |
 | `general_params.py` | Parámetros generales en `config.json`. |
 | `modo_prueba.py` | Copia de prueba (`APP_COPIA_PRUEBA=1`, otra carpeta, puerto distinto de 5000). |
+| `usuarios.py`, `usuarios_bq.py`, `registro_logs.py` | Login, perfiles (Admin, Analítica), páginas de usuarios y registro, usuarios compartidos por BigQuery y acciones en `logs/`. |
 | `templates/`, `static/css/valoro.css` | Interfaz (AdminLTE + diseño Valoro: barra lateral verde oscuro con el logo, contenido blanco). `config_sms.html` y `config_email.html` sirven a dos páginas cada una (`modo` = `enviar` o `programar`; lo de un solo modo lleva la clase `solo-enviar` / `solo-programar`). La lista de programaciones SMS está en `templates/sms/_lista_programaciones.html`. Logo: `static/img/logo-valoro.png`. |

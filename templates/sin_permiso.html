@@ -1,0 +1,15 @@
+{% extends "layouts/adminlte.html" %}
+{% block title %}Sin permiso{% endblock %}
+{% block page_title %}<h1>Sin permiso</h1>{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-body">
+    <p><i class="fas fa-ban"></i> <strong>No tienes permiso para esta página.</strong></p>
+    <p class="text-muted">Tu perfil ({{ perfil_actual }}) permite ver el inicio, el historial de programaciones,
+       los envíos, la galería de plantillas y el dashboard, pero no enviar, programar, editar plantillas
+       ni configurar. Si necesitas más acceso, pídeselo a un usuario Admin.</p>
+    <a href="/" class="btn btn-primary btn-sm"><i class="fas fa-home"></i> Ir al inicio</a>
+  </div>
+</div>
+{% endblock %}

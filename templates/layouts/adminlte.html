@@ -15,10 +15,34 @@
 
     <!-- Valoro Design System -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/valoro.css') }}">
-    
+
+    {% if usuario_actual and usuario_actual.perfil != 'admin' %}
+    {# Analítica: el servidor ya rechaza estas acciones (usuarios.py); aquí solo se
+       ocultan los botones de enviar, programar, editar y borrar de las páginas que
+       sí puede ver (inicio, programaciones, plantillas). #}
+    <style>
+        a[href="/config-sms"], a[href="/sms/programaciones"], a[href="/config-mensajes"],
+        a[href="/config-email"], a[href^="/config-email?"], a[href="/email/programaciones"], a[href="/email/plantillas"],
+        #hpNueva, .hp-acciones .editar-btn, .hp-acciones .cancelar-btn, .hp-acciones .reintentar-btn,
+        .hp-acciones .eliminar-btn, #verEditar, #btnNueva,
+        .gp-acciones [data-accion="editar"], .gp-acciones [data-accion="duplicar"],
+        .gp-acciones [data-accion="activa"], .gp-acciones [data-accion="eliminar"] { display: none !important; }
+    </style>
+    {% endif %}
     {% block extra_css %}{% endblock %}
+    <style>
+        /* Usuario con sesión, abajo en el menú lateral (.sidebar ya es columna y .sidebar-nav crece). */
+        .sidebar-usuario { padding: 14px 20px; border-top: 1px solid rgba(255, 255, 255, 0.08);
+                           display: flex; align-items: center; gap: 10px; color: #fff; font-size: .82rem; }
+        .sidebar-usuario .quien { flex: 1; min-width: 0; }
+        .sidebar-usuario .nombre { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .sidebar-usuario .perfil { color: #c9d9cc; font-size: .72rem; }
+        .sidebar-usuario a { color: #c9d9cc; text-decoration: none; white-space: nowrap; }
+        .sidebar-usuario a:hover { color: var(--valoro-lima); }
+    </style>
 </head>
-<body>
+{# perfil-<x>: estilos por perfil (Admin / Analítica). #}
+<body class="{{ 'perfil-' ~ usuario_actual.perfil if usuario_actual else '' }}">
 
 <div class="wrapper">
 
@@ -45,7 +69,9 @@
                 {'url': '/email/programaciones', 'texto': 'Programaciones email', 'icono': 'fa-calendar-alt', 'activo': ep == 'email_programaciones_pagina'},
                 {'url': '/email/plantillas', 'texto': 'Plantillas email', 'icono': 'fa-file-alt', 'activo': ep == 'email_plantillas_pagina'},
             ]},
-            {'id': 'config', 'titulo': 'Configuración', 'icono': 'fa-cog', 'items': [
+            {'id': 'config', 'titulo': 'Administración', 'icono': 'fa-user-shield', 'items': [
+                {'url': '/usuarios', 'texto': 'Usuarios', 'icono': 'fa-users', 'activo': ep == 'usuarios_pagina'},
+                {'url': '/registro', 'texto': 'Registro', 'icono': 'fa-list', 'activo': ep == 'registro_pagina'},
                 {'url': '/config-general', 'texto': 'Parámetros generales', 'icono': 'fa-sliders-h', 'activo': ep == 'config_general'},
             ]},
         ] %}
@@ -53,19 +79,22 @@
         {% for g in menu %}{% for it in g['items'] if it['activo'] %}{% set ns.grupo = g %}{% set ns.item = it %}{% endfor %}{% endfor %}
 
         <nav class="sidebar-nav">
-            <a href="/" class="sidebar-link {% if ep == 'index' %}active{% endif %}">
-                <i class="fas fa-home nav-icon"></i> Inicio
+            {# Cada opción se muestra solo si el perfil puede abrirla (usuarios.puede). #}
+            {% set sueltos = [
+                {'url': '/', 'texto': 'Inicio', 'icono': 'fa-home', 'activo': ep == 'index'},
+                {'url': '/programaciones', 'texto': 'Programaciones', 'icono': 'fa-clock-rotate-left', 'activo': ep == 'programaciones_pagina'},
+                {'url': '/envios', 'texto': 'Envíos', 'icono': 'fa-paper-plane', 'activo': ep == 'envios_pagina'},
+                {'url': '/plantillas', 'texto': 'Plantillas', 'icono': 'fa-images', 'activo': ep == 'plantillas_galeria'},
+            ] %}
+            {% for it in sueltos if puede_ver(it['url']) %}
+            <a href="{{ it['url'] }}" class="sidebar-link {% if it['activo'] %}active{% endif %}">
+                <i class="fas {{ it['icono'] }} nav-icon"></i> {{ it['texto'] }}
             </a>
-            <a href="/programaciones" class="sidebar-link {% if ep == 'programaciones_pagina' %}active{% endif %}">
-                <i class="fas fa-clock-rotate-left nav-icon"></i> Programaciones
-            </a>
-            <a href="/envios" class="sidebar-link {% if ep == 'envios_pagina' %}active{% endif %}">
-                <i class="fas fa-paper-plane nav-icon"></i> Envíos
-            </a>
-            <a href="/plantillas" class="sidebar-link {% if ep == 'plantillas_galeria' %}active{% endif %}">
-                <i class="fas fa-images nav-icon"></i> Plantillas
-            </a>
+            {% endfor %}
             {% for g in menu %}
+            {% set visibles = [] %}
+            {% for it in g['items'] if puede_ver(it['url']) %}{% set _ = visibles.append(it) %}{% endfor %}
+            {% if visibles %}
             {% set abierto = ns.grupo and ns.grupo['id'] == g['id'] %}
             <div class="sidebar-group {% if abierto %}open{% endif %}" data-grupo="{{ g['id'] }}" {% if abierto %}data-actual="1"{% endif %}>
                 <button type="button" class="sidebar-group-toggle" aria-expanded="{{ 'true' if abierto else 'false' }}">
@@ -74,17 +103,27 @@
                     <i class="fas fa-chevron-down sidebar-group-chevron"></i>
                 </button>
                 <div class="sidebar-group-items">
-                    {% for it in g['items'] %}
+                    {% for it in visibles %}
                     <a href="{{ it['url'] }}" class="sidebar-link {% if it['activo'] %}active{% endif %}">
                         <i class="fas {{ it['icono'] }} nav-icon"></i> {{ it['texto'] }}
                     </a>
                     {% endfor %}
                 </div>
             </div>
+            {% endif %}
             {% endfor %}
         </nav>
-        
-        
+
+        {% if usuario_actual %}
+        <div class="sidebar-usuario">
+            <i class="fas fa-user-circle" style="font-size:1.4rem;"></i>
+            <div class="quien">
+                <div class="nombre" title="{{ usuario_actual.usuario }}">{{ usuario_actual.nombre or usuario_actual.usuario }}</div>
+                <div class="perfil">{{ perfil_actual }} · <a href="/cambiar-clave">Clave</a></div>
+            </div>
+            <a href="/logout" title="Salir"><i class="fas fa-sign-out-alt"></i> Salir</a>
+        </div>
+        {% endif %}
     </aside>
 
     <!-- CONTENT WRAPPER -->
@@ -104,7 +143,8 @@
                     {%- elif ep == 'index' -%}Inicio
                     {%- elif ep == 'programaciones_pagina' -%}Programaciones
                     {%- elif ep == 'envios_pagina' -%}Envíos
-                    {%- elif ep == 'plantillas_galeria' -%}Plantillas{%- else -%}{{ app_nombre }}{%- endif -%}
+                    {%- elif ep == 'plantillas_galeria' -%}Plantillas
+                    {%- elif ep == 'cambiar_clave' -%}Cambiar clave{%- else -%}{{ app_nombre }}{%- endif -%}
                 {% endblock %}</span>
             </div>
         </nav>
