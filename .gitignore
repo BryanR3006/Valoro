@@ -37,3 +37,6 @@ dashboard_cache.json
 
 # Candado de una sola app por carpeta (instancia_unica.py)
 app.lock
+
+# Últimos campos personalizados leídos de la cuenta de email (services/email_client.py)
+email_campos_cache.json

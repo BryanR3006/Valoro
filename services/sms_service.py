@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 from uuid import uuid4
 from database import db, ProgramacionSms
 from listas_negras import LISTA_NEGRA_SMS
+from services.errores import marcar_claro
 from services.variables import buscar_columna, clave, es_nombre
 import requests
 import logging
@@ -67,12 +68,17 @@ class InfobipSenderV2:
             "Accept": "application/json"
         })
 
-    def enviar_lote(self, lista_mensajes: List[Dict], reintentos: int = MAX_REINTENTOS) -> Optional[Dict]:
+    def enviar_lote(self, lista_mensajes: List[Dict], reintentos: int = MAX_REINTENTOS) -> Dict:
         """
-        Envía un lote de mensajes a Infobip con ACORTAMIENTO DE URLs.
+        Envía un lote de mensajes a Infobip con acortamiento de URLs y devuelve
+        su respuesta. Si no sale lanza SmsServiceError con la causa en claro
+        (sin conexión, límite, clave, rechazo de Infobip). Solo se reintenta
+        cuando el lote seguro no salió: no conectó, 429 (límite) o 503. Si
+        Infobip no respondió a tiempo el lote pudo haber salido: no se reintenta
+        (duplicaría los SMS).
         """
         url = f"{self.base_url}/sms/2/text/advanced"
-        
+
         payload = {
             "messages": lista_mensajes,
             "urlOptions": {
@@ -81,25 +87,113 @@ class InfobipSenderV2:
                 "removeProtocol": False
             }
         }
-        
+
         logger.info(f"📤 Enviando lote de {len(payload['messages'])} SMS a Infobip (URLs se acortarán automáticamente)")
         logger.debug(f"📦 Payload: {json.dumps(payload, ensure_ascii=False)[:500]}...")
-        
+
+        motivo = ""
         for intento in range(1, reintentos + 1):
             try:
-                resp = self.session.post(url, json=payload, timeout=30)
-                if resp.status_code in [200, 201]:
+                resp = self.session.post(url, json=payload, timeout=(6, 60))
+            except requests.exceptions.ConnectTimeout as e:
+                motivo = "Sin conexión con Infobip: no se pudo conectar. Revisa el internet del equipo."
+                logger.warning(f"⚠️ Intento {intento}/{reintentos}: {e}")
+            except requests.exceptions.ConnectionError as e:
+                if not re.search(r"NewConnectionError|Failed to establish|NameResolution|getaddrinfo", str(e)):
+                    # Se cortó con el lote ya enviado: pudo haber salido.
+                    logger.error(f"❌ Infobip cortó la conexión durante el envío del lote: {e}")
+                    raise marcar_claro(SmsServiceError(
+                        "Infobip cortó la conexión durante el envío: el lote pudo haber salido. "
+                        "Revisa el dashboard antes de reenviar."))
+                motivo = "Sin conexión con Infobip: no se pudo conectar. Revisa el internet del equipo."
+                logger.warning(f"⚠️ Intento {intento}/{reintentos}: {e}")
+            except requests.exceptions.Timeout as e:
+                logger.error(f"❌ Infobip no respondió a tiempo al enviar el lote: {e}")
+                raise marcar_claro(SmsServiceError(
+                    "Infobip no respondió a tiempo: el lote pudo haber salido. Revisa el dashboard antes de reenviar."))
+            else:
+                if resp.status_code in (200, 201):
                     logger.info(f"✅ Lote enviado exitosamente (URLs acortadas)")
                     return resp.json()
-                else:
-                    logger.warning(f"⚠️ Intento {intento}/{reintentos}: Error {resp.status_code} - {resp.text[:200]}")
-                    if intento < reintentos:
-                        time.sleep(2 * intento)
-            except requests.exceptions.RequestException as e:
-                logger.warning(f"⚠️ Intento {intento}/{reintentos}: {e}")
-                if intento < reintentos:
-                    time.sleep(2 * intento)
-        return None
+                detalle = _detalle_infobip(resp)
+                logger.warning(f"⚠️ Intento {intento}/{reintentos}: Infobip respondió {resp.status_code} {detalle}")
+                motivo = _motivo_http_infobip(resp.status_code, detalle)
+                if resp.status_code not in (429, 503):
+                    raise marcar_claro(SmsServiceError(motivo))
+            if intento < reintentos:
+                time.sleep((5 if "límite" in motivo else 2) * intento)
+        raise marcar_claro(SmsServiceError(motivo or "Infobip no aceptó el lote."))
+
+
+def _detalle_infobip(resp) -> str:
+    """Texto del error que manda Infobip (requestError.serviceException), o el inicio del cuerpo."""
+    try:
+        excepcion = (resp.json().get("requestError") or {}).get("serviceException") or {}
+        if excepcion:
+            return f"{excepcion.get('messageId', '')}: {excepcion.get('text', '')}".strip(": ")
+    except ValueError:
+        pass
+    return (resp.text or "")[:200]
+
+
+def _motivo_http_infobip(codigo: int, detalle: str) -> str:
+    """Causa en claro de una respuesta de Infobip que no es 200."""
+    if codigo in (401, 403):
+        return f"Infobip rechazó la clave de acceso (api_key en config.json): revísala. (HTTP {codigo})"
+    if codigo == 429:
+        return "Infobip no deja enviar tantos lotes seguidos (límite de la API, HTTP 429): espera unos minutos."
+    if codigo == 503:
+        return "Infobip no está disponible en este momento (HTTP 503): intenta en unos minutos."
+    if "credit" in detalle.lower() or "balance" in detalle.lower():
+        return f"Sin saldo en Infobip: recarga la cuenta para poder enviar. ({detalle})"
+    return f"Infobip rechazó el lote (HTTP {codigo}): {detalle or 'sin detalle'}"
+
+
+# Motivos de rechazo por mensaje (status.name de Infobip) → texto claro.
+MOTIVOS_RECHAZO = {
+    "REJECTED_NOT_ENOUGH_CREDITS": "sin saldo en Infobip (recarga la cuenta)",
+    "REJECTED_DESTINATION": "número de destino inválido o bloqueado",
+    "REJECTED_INVALID_DESTINATION": "número de destino inválido",
+    "REJECTED_PREFIX_MISSING": "número sin indicativo de país",
+    "REJECTED_SENDER": "remitente (sender_id) no permitido",
+    "REJECTED_ROUTE_NOT_AVAILABLE": "ruta no disponible para ese operador",
+    "REJECTED_FLOODING_FILTER": "Infobip los frenó por repetidos (filtro anti-flood)",
+    "REJECTED_NETWORK": "la red del operador no está disponible",
+}
+
+
+def resumen_filtros_sms(total_filas: int, details: Dict) -> str:
+    """'144 registros · 112 excluidos (110 ya recibieron hoy, 2 en lista negra)' para la consola."""
+    partes = [(details.get("duplicados_hoy") or 0, "ya recibieron hoy"),
+              (details.get("excluidos_lista_negra") or 0, "en lista negra"),
+              (details.get("invalid_numbers") or 0, "sin número válido")]
+    partes += [(n, str(motivo)) for motivo, n in (details.get("excluidos_reglas") or {}).items()]
+    partes = [(n, texto) for n, texto in partes if n]
+    texto = f"{total_filas} registros"
+    if partes:
+        texto += (f" · {sum(n for n, _ in partes)} excluidos ("
+                  + ", ".join(f"{n} {t}" for n, t in sorted(partes, key=lambda x: -x[0])) + ")")
+    return texto
+
+
+def motivo_rechazo(nombre: str) -> str:
+    return MOTIVOS_RECHAZO.get(nombre) or str(nombre).replace("REJECTED_", "").replace("_", " ").lower()
+
+
+def resumen_envio_sms(total: int, enviados: int, errores: List[str], rechazos: Dict[str, int]) -> str:
+    """
+    Resultado de un envío en una frase clara para la pantalla: cuántos salieron
+    y, si faltaron, por qué (rechazos de Infobip por mensaje o lotes que no salieron).
+    """
+    if total and enviados == total:
+        return f"{enviados} SMS enviados."
+    partes = [f"{enviados} de {total} SMS enviados."]
+    if rechazos:
+        detalle = "; ".join(f"{motivo_rechazo(m)} ({n})" for m, n in sorted(rechazos.items(), key=lambda x: -x[1]))
+        partes.append(f"Infobip rechazó {sum(rechazos.values())}: {detalle}.")
+    if errores:
+        partes.append(f"Lotes que no salieron: {errores[0]}")
+    return " ".join(partes)
 
 
 # ==================================================
@@ -427,12 +521,15 @@ def enviar_sms_desde_filas(
     allow_resend: bool = False,
     id_mensaje: str = "",
     id_campana: str = "",
-    link: str = ""
+    link: str = "",
+    progreso=None
 ) -> Dict:
     """
     Función principal: valida, genera mensajes, envía por lotes con callbackData.
     id_mensaje e id_campana (del constructor) van en el payload de cada SMS:
     los dos en callbackData y el de campaña también en campaignReferenceId.
+    progreso(texto): opcional, recibe una línea clara antes de enviar
+    (registros, excluidos y cuántos SMS van a Infobip) para la consola.
     🔥 MODIFICADO: Ahora captura y guarda message_id individual.
     """
     api_key = (config.get("api_key") or "").strip()
@@ -519,7 +616,12 @@ def enviar_sms_desde_filas(
     
     # Dividir en lotes
     lotes = [messages[i:i + batch_size] for i in range(0, len(messages), batch_size)]
-    
+    if progreso:
+        senuelos = sum(1 for item in prepared if item.get("senuelo"))
+        progreso(f"{resumen_filtros_sms(len(rows), details)} · enviando {len(messages)} SMS a Infobip"
+                 + (f" en {len(lotes)} lotes" if len(lotes) > 1 else "")
+                 + (f" ({senuelos} señuelos)" if senuelos else "") + "…")
+
     logger.info(f"📦 Total mensajes: {len(messages)}, Lotes: {len(lotes)}, Batch size: {batch_size}")
     
     # Enviar lotes
@@ -527,33 +629,41 @@ def enviar_sms_desde_filas(
     results = []
     max_workers = max(1, min(int(config.get("max_workers", MAX_WORKERS)), 5))
     
+    lotes_aceptados = set()  # índices de los lotes que Infobip aceptó
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(sender.enviar_lote, lote) for lote in lotes]
+        futures = {executor.submit(sender.enviar_lote, lote): n for n, lote in enumerate(lotes)}
         for future in as_completed(futures):
             try:
                 result = future.result(timeout=60)
                 if result:
                     results.append({"success": True, "data": result})
+                    lotes_aceptados.add(futures[future])
                     # Log de resultados individuales
                     if "messages" in result:
                         for msg in result["messages"]:
                             status = msg.get("status", {}).get("name", "?")
-                            logger.info(f"   📱 {msg.get('to', '?')} | {status}")
+                            logger.debug(f"   📱 {msg.get('to', '?')} | {status}")
                 else:
-                    results.append({"success": False, "message": "Error en lote"})
+                    results.append({"success": False, "message": "Infobip no aceptó el lote."})
             except Exception as e:
-                logger.error(f"Error en lote: {e}")
-                results.append({"success": False, "message": f"Error en lote: {e}"})
+                logger.error(f"❌ Lote no enviado: {e}")
+                results.append({"success": False, "message": str(e)})
     
     # Procesar resultados
     successful = [r for r in results if r.get("success")]
     failed = [r for r in results if not r.get("success")]
     bulk_ids = []
     
+    # SMS de los lotes que Infobip aceptó (messages[i] es el de prepared[i]). Los de
+    # un lote que no salió no van a SmsLog: si fueran, el próximo turno los tomaría
+    # como "ya recibieron hoy" y esos clientes se quedarían sin el SMS.
+    en_lotes_aceptados = [item for n in sorted(lotes_aceptados)
+                          for item in prepared[n * batch_size:(n + 1) * batch_size]]
+
     # message_id y bulk_id de cada SMS: con ellos el polling actualiza su estado.
     # El teléfono se compara por sus últimos 10 dígitos (Infobip puede devolverlo con 57).
     sin_asignar = {}
-    for item in prepared:
+    for item in en_lotes_aceptados:
         sin_asignar.setdefault(telefono_10(item["phone"]), []).append(item)
     for r in successful:
         data = r.get("data", {})
@@ -566,6 +676,8 @@ def enviar_sms_desde_filas(
                 item = candidatos.pop(0)
                 item["message_id"] = msg_resp.get("messageId") or ""
                 item["bulk_id"] = bulk_id or ""
+                # Rechazado por Infobip (sin saldo, número inválido…): no salió.
+                item["rechazado"] = str((msg_resp.get("status") or {}).get("groupName") or "").upper() == "REJECTED"
     sin_id = sum(len(v) for v in sin_asignar.values())
     if sin_id:
         logger.warning(f"⚠️ {sin_id} SMS quedaron sin message_id (el polling los busca por lote y teléfono)")
@@ -620,13 +732,15 @@ def enviar_sms_desde_filas(
     for result in failed:
         errores.append(result.get("message", "Error desconocido"))
     
-    # Guardar en SmsLog (por partes). Un error aquí no deshace el envío, pero
+    # Guardar en SmsLog (por partes) solo los SMS que salieron: los de lotes
+    # aceptados que Infobip no rechazó. Un error aquí no deshace el envío, pero
     # queda en el resultado para que se vea: sin registro no hay seguimiento.
-    registro_smslog = {"total": len(prepared), "guardados": 0, "errores": []}
-    if client and prepared:
+    salieron = [item for item in en_lotes_aceptados if not item.get("rechazado")]
+    registro_smslog = {"total": len(salieron), "guardados": 0, "errores": []}
+    if client and salieron:
         try:
             registro_smslog = guardar_sms_log(
-                client, prepared,
+                client, salieron,
                 campaign=campaign,
                 usuario=usuario,
                 bulk_ids=bulk_ids,
@@ -641,9 +755,21 @@ def enviar_sms_desde_filas(
         logger.error(f"❌ SmsLog: {registro_smslog['guardados']} de {registro_smslog['total']} SMS registrados. "
                      f"Errores: {registro_smslog['errores'][:3]}")
     
-    # SMS que Infobip aceptó (uno por mensaje en la respuesta de cada lote).
-    enviados = sum(len(r["data"].get("messages") or []) for r in successful)
+    # SMS que Infobip aceptó. Los rechazados (sin saldo, número inválido…) vienen en
+    # la respuesta con groupName REJECTED: no cuentan como enviados.
+    enviados, rechazos = 0, {}
+    for r in successful:
+        for msg in r["data"].get("messages") or []:
+            estado = msg.get("status") or {}
+            if str(estado.get("groupName") or "").upper() == "REJECTED":
+                motivo = estado.get("name") or estado.get("description") or "REJECTED"
+                rechazos[motivo] = rechazos.get(motivo, 0) + 1
+            else:
+                enviados += 1
     fallidos = len(messages) - enviados
+    mensaje = resumen_envio_sms(len(messages), enviados, errores, rechazos)
+    if fallidos:
+        logger.warning(f"⚠️ {mensaje}")
     
     # ============================================================
     # NUEVO: Agregar bulk_ids al resultado
@@ -659,6 +785,8 @@ def enviar_sms_desde_filas(
         "details": details,
         "archivo_guardado": "bulk_ids_registrados.txt" if bulk_ids else None,
         "registro_smslog": registro_smslog,
+        "rechazos": rechazos,
+        "message": mensaje,
     }
 
 
@@ -922,6 +1050,16 @@ def consultar_reporte_infobip(bulk_id: str, api_key: str, base_url: str) -> List
     return todos_los_resultados
 
 
+def _timestamp_bigquery(valor):
+    """
+    Fecha de Infobip para una columna TIMESTAMP: '2026-10-22T15:00:00.599+0000'
+    → '...599+00:00' (BigQuery no acepta +0000 sin los dos puntos). Vacía → None.
+    """
+    if not valor:
+        return None
+    return re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", str(valor))
+
+
 def actualizar_estados_pendientes(api_key: str, base_url: str, client=None):
     """
     🔥 NUEVO: Consulta el estado de mensajes PENDIENTES en BigQuery.
@@ -998,8 +1136,8 @@ def actualizar_estados_pendientes(api_key: str, base_url: str, client=None):
                 "status_description": status.get("description", ""),
                 "error_name": error.get("name", ""),
                 "error_description": error.get("description", ""),
-                "sent_at": item.get("sentAt"),
-                "done_at": item.get("doneAt"),
+                "sent_at": _timestamp_bigquery(item.get("sentAt")),
+                "done_at": _timestamp_bigquery(item.get("doneAt")),
                 "precio": price.get("pricePerMessage", 0),
                 "currency": price.get("currency", "COP"),
                 "fecha_consulta": datetime.now(timezone.utc).isoformat(),
@@ -1012,7 +1150,8 @@ def actualizar_estados_pendientes(api_key: str, base_url: str, client=None):
             try:
                 errors = client.insert_rows_json(SMS_DELIVERY_REPORTS_TABLE, registros)
                 if errors:
-                    logger.error(f"Error guardando reportes: {errors}")
+                    logger.error(f"Error guardando reportes de {bulk_id} en SmsDeliveryReports: "
+                                 f"{len(errors)} filas con error; la primera: {errors[0]}")
                     total_errores += 1
                 else:
                     logger.info(f"✅ {len(registros)} reportes guardados en SmsDeliveryReports")
@@ -1032,7 +1171,8 @@ def actualizar_estados_pendientes(api_key: str, base_url: str, client=None):
         "actualizados": total_actualizados,
         "sin_cambios": total_sin_cambios,
         "errores": total_errores,
-        "bulkids_procesados": len(por_bulk)
+        "bulkids_procesados": len(por_bulk),
+        "pendientes": len(pendientes),
     }
 
 

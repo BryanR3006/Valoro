@@ -13,6 +13,7 @@ from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from consola import LOGGER_ACTIVIDAD, ArchivoRotativo, FiltroClaro, FormatoClaro
 from database import db, init_db  # noqa: F401  (db se importa desde backend en app.py)
 from general_params import (
     get_console_message_interval_seconds,
@@ -93,29 +94,25 @@ def _configure_logging() -> None:
 
     root = logging.getLogger()
     root.setLevel(logging.INFO)
+    # Avisos de librerías (p. ej. LegacyAPIWarning de SQLAlchemy) al log, no a la consola.
+    logging.captureWarnings(True)
 
     # -----------------------------
-    # Consola
+    # Consola y Actividad en vivo: solo las líneas claras de actividad
+    # (consola.py). Lo técnico va a app_log.txt y logs/sms.log, logs/email.log.
     # -----------------------------
-    if not any(
-        isinstance(h, logging.StreamHandler)
-        and not isinstance(h, logging.FileHandler)
-        for h in root.handlers
-    ):
-        console = logging.StreamHandler()
-        console.setFormatter(formatter)
-        root.addHandler(console)
-
-    # -----------------------------
-    # Dashboard (NUEVO)
-    # -----------------------------
-    if not any(
-        isinstance(h, ActivityLogHandler)
-        for h in root.handlers
-    ):
-        activity_handler = ActivityLogHandler()
-        activity_handler.setFormatter(formatter)
-        root.addHandler(activity_handler)
+    consolas = [h for h in root.handlers
+                if type(h) is logging.StreamHandler or isinstance(h, ActivityLogHandler)]
+    if not any(type(h) is logging.StreamHandler for h in consolas):
+        consolas.append(logging.StreamHandler())
+    if not any(isinstance(h, ActivityLogHandler) for h in consolas):
+        consolas.append(ActivityLogHandler())
+    for handler in consolas:
+        handler.setFormatter(FormatoClaro())
+        if not any(isinstance(f, FiltroClaro) for f in handler.filters):
+            handler.addFilter(FiltroClaro())
+        if handler not in root.handlers:
+            root.addHandler(handler)
 
     # -----------------------------
     # Archivo con todo lo de la consola (programaciones, envíos, errores).
@@ -127,7 +124,7 @@ def _configure_logging() -> None:
         and Path(h.baseFilename).resolve() == APP_LOG_FILE.resolve()
         for h in root.handlers
     ):
-        app_file_handler = RotatingFileHandler(
+        app_file_handler = ArchivoRotativo(
             str(APP_LOG_FILE),
             maxBytes=APP_LOG_MAX_BYTES,
             backupCount=APP_LOG_BACKUPS,
@@ -171,16 +168,15 @@ logger = logging.getLogger(__name__)
 execution_logger = logging.getLogger("execution")
 
 
-def _format_log_line(level: str, message: str) -> str:
-    ts = datetime.now().strftime(LOG_DATEFMT)
-    return f"{ts} - {level.upper()} - {message}"
+actividad_logger = logging.getLogger(LOGGER_ACTIVIDAD)
 
 
 def log_activity(message: str, level: str = "INFO") -> None:
-    """Visible en el tablero (/api/recent_logs); no escribe en disco."""
-    line = _format_log_line(level, message)
-    with _activity_lock:
-        _activity_log.append(line)
+    """
+    Línea clara de actividad: sale en la consola y en Actividad en vivo
+    (/api/recent_logs) y queda en app_log.txt. Una línea por paso, sin detalle técnico.
+    """
+    actividad_logger.log(getattr(logging, level.upper(), logging.INFO), message)
 
 
 def log_to_file(message: str, level: str = "INFO") -> None:
@@ -196,12 +192,12 @@ def log_task(message: str, level: str = "INFO") -> None:
 
 
 def log_gui_action(action: str, **fields) -> None:
-    """Acción desde la interfaz: solo tablero (no archivo)."""
+    """Acción desde la interfaz: solo a app_log.txt (la consola muestra la línea clara de cada paso)."""
     if fields:
         detail = ", ".join(f"{key}={value}" for key, value in fields.items())
-        log_activity(f"[GUI] {action} — {detail}")
+        logger.info(f"[GUI] {action} — {detail}")
     else:
-        log_activity(f"[GUI] {action}")
+        logger.info(f"[GUI] {action}")
 
 
 def _execution_log_file_handlers():
@@ -231,16 +227,21 @@ def _attach_execution_log_handler():
 
 
 def _archivo_de_log_por_area(ruta: Path, nombres) -> None:
-    """Agrega un archivo de log (rota a los 5 MB, 5 respaldos) a los loggers del área."""
+    """
+    Agrega un archivo de log (rota a los 5 MB, 5 respaldos) a los loggers del área.
+    Un solo handler para todos: con uno por logger el archivo quedaba abierto
+    varias veces y Windows no dejaba rotarlo (WinError 32 en cada línea).
+    """
     ruta.parent.mkdir(parents=True, exist_ok=True)
+    handler = ArchivoRotativo(str(ruta), maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
+    handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT))
     for nombre in nombres:
         area_logger = logging.getLogger(nombre)
         area_logger.setLevel(logging.INFO)
-        if any(isinstance(h, RotatingFileHandler) and Path(h.baseFilename).resolve() == ruta.resolve()
-               for h in area_logger.handlers):
-            continue
-        handler = RotatingFileHandler(str(ruta), maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
-        handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT))
+        for viejo in [h for h in area_logger.handlers if isinstance(h, RotatingFileHandler)
+                      and Path(h.baseFilename).resolve() == ruta.resolve()]:
+            area_logger.removeHandler(viejo)
+            viejo.close()
         area_logger.addHandler(handler)
 
 
@@ -381,12 +382,30 @@ def rotate_log_if_needed():
             logger.error(f"No se pudo rotar el log: {e}")
 
 
+# Resumen de programaciones pendientes de hoy para la consola: app.py registra
+# la función (registrar_resumen_consola) y se muestra solo cuando cambia.
+_resumen_consola = None
+_ultimo_resumen_consola = ""
+
+
+def registrar_resumen_consola(funcion) -> None:
+    global _resumen_consola
+    _resumen_consola = funcion
+
+
 def console_message_heartbeat():
-    """Mensaje fijo en consola cada N segundos."""
-    print(
-        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Revisando programaciones de SMS y email...",
-        flush=True,
-    )
+    """Cada N segundos (console_message_interval_seconds): las programaciones pendientes de hoy, si cambiaron."""
+    global _ultimo_resumen_consola
+    if _resumen_consola is None:
+        return
+    try:
+        texto = _resumen_consola()
+    except Exception:
+        logger.exception("No se pudo armar el resumen de programaciones pendientes")
+        return
+    if texto and texto != _ultimo_resumen_consola:
+        _ultimo_resumen_consola = texto
+        log_activity(texto)
 
 
 def mantenimiento_logs():
@@ -408,10 +427,6 @@ def polling_estados_sms():
     Se ejecuta cada 10 minutos.
     """
     try:
-        logger.info("="*60)
-        logger.info("🔄 POLLING DE ESTADOS SMS")
-        logger.info("="*60)
-        
         # Obtener configuración de Infobip
         config = load_config()
         infobip_config = config.get("infobip", {})
@@ -419,15 +434,15 @@ def polling_estados_sms():
         base_url = infobip_config.get("base_url", "").strip()
         
         if not api_key or not base_url:
-            logger_sms.error("❌ Polling de estados SMS: falta api_key o base_url en la sección infobip de config.json")
+            log_activity("Estados de SMS: falta api_key o base_url en la sección infobip de config.json.", "ERROR")
             return
-        
+
         # Obtener cliente de BigQuery
         from conexion_bigquery import get_bigquery_client
         client = get_bigquery_client()
-        
+
         if not client:
-            logger_sms.error("❌ Polling de estados SMS: no se pudo conectar a BigQuery")
+            log_activity("Estados de SMS: no se pudo conectar a BigQuery.", "ERROR")
             return
         
         # 🔥 Importar la función CORRECTA desde sms_service
@@ -440,11 +455,27 @@ def polling_estados_sms():
             client=client
         )
         
-        logger.info(f"📊 Resultado del polling: {resultado}")
-        logger.info("="*60)
-        
+        logger_sms.info(f"📊 Resultado del polling: {resultado}")
+        # En la consola solo si algo cambió o falló (cada 10 min, sin ruido).
+        if not resultado.get("success"):
+            log_activity(f"Estados de SMS: no se pudieron consultar. {_explicar(resultado.get('message'))}",
+                         "WARNING")
+        elif resultado.get("actualizados") or resultado.get("errores"):
+            log_activity(f"🔄 Estados de SMS: {resultado.get('actualizados', 0)} actualizados "
+                         f"(entregados / fallidos) de {resultado.get('pendientes', 0)} pendientes en BigQuery"
+                         + (f"; {resultado['errores']} lotes no se guardaron en SmsDeliveryReports (ver logs/sms.log)."
+                            if resultado.get("errores") else "."))
+
     except Exception as e:
         logger_sms.exception(f"❌ Error en el polling de estados SMS: {e}")
+        log_activity(f"Estados de SMS: no se pudieron actualizar. {_explicar(e)}", "WARNING")
+
+
+def _explicar(error) -> str:
+    """Mensaje claro de un error (services/errores.py) para la consola."""
+    from services.errores import explicar_error
+    return explicar_error(error if isinstance(error, BaseException) else Exception(str(error or "")),
+                          servicio="Infobip (SMS)")
 
 
 # ==================================================

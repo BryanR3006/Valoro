@@ -1,11 +1,15 @@
 
+import hashlib
 import json
 import logging
 import threading
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
+from uuid import uuid4
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -23,6 +27,46 @@ TIMEOUT_CAMPANA = 120
 TIMEOUT_CONEXION = 6
 TIMEOUT_RESPUESTA = 30
 REINTENTOS_CONEXION = 4
+# Consultas de solo lectura (campos, contactos, campañas): también se reintentan
+# si la respuesta tarda o se corta, porque repetir una lectura no cambia nada en
+# la cuenta. El 22/10/2026 una sola demora de customfields/getall (más de 30 s)
+# tumbó un email programado y dejó la recurrente en error.
+INTENTOS_LECTURA = 3
+ESPERAS_LECTURA = (2, 5)  # segundos antes del 2.º y del 3.er intento
+
+# Campos personalizados: casi nunca cambian. Se guardan los últimos leídos (en
+# memoria y en disco, por cuenta) para seguir enviando si la API no los entrega.
+ARCHIVO_CAMPOS = Path(__file__).resolve().parent.parent / "email_campos_cache.json"
+_campos_memoria = {}
+
+
+def _cuenta(api_key: str) -> str:
+    """Identificador de la cuenta para la caché (nunca se guarda la api_key)."""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+
+
+def _guardar_campos(api_key: str, campos: List[Dict]) -> None:
+    _campos_memoria[_cuenta(api_key)] = (campos, datetime.now().isoformat(timespec="seconds"))
+    try:
+        ARCHIVO_CAMPOS.write_text(json.dumps({
+            "cuenta": _cuenta(api_key), "fecha": datetime.now().isoformat(timespec="seconds"), "campos": campos,
+        }, ensure_ascii=False), encoding="utf-8")
+    except OSError as e:
+        logger.warning(f"⚠️ No se pudieron guardar los campos personalizados en {ARCHIVO_CAMPOS.name}: {e}")
+
+
+def _campos_guardados(api_key: str):
+    """(campos, fecha) de los últimos campos leídos de esa cuenta, o (None, None)."""
+    cuenta = _cuenta(api_key)
+    if cuenta in _campos_memoria:
+        return _campos_memoria[cuenta]
+    try:
+        datos = json.loads(ARCHIVO_CAMPOS.read_text(encoding="utf-8"))
+        if datos.get("cuenta") == cuenta and datos.get("campos"):
+            return datos["campos"], datos.get("fecha")
+    except (OSError, ValueError):
+        pass
+    return None, None
 
 
 class EmailClientError(Exception):
@@ -82,6 +126,24 @@ class EmailClient:
             self._hilo.sesion = sesion
         return sesion
 
+    def _leer(self, metodo: str, url: str, **kwargs) -> requests.Response:
+        """
+        Petición de solo lectura con reintentos también si la respuesta tarda o
+        se corta (INTENTOS_LECTURA). Las escrituras (crear, editar, enviar) no
+        pasan por aquí: repetirlas podría duplicar.
+        """
+        kwargs.setdefault("timeout", (TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
+        for intento in range(INTENTOS_LECTURA):
+            try:
+                return self.session.request(metodo, url, **kwargs)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if intento == INTENTOS_LECTURA - 1:
+                    raise
+                espera = ESPERAS_LECTURA[min(intento, len(ESPERAS_LECTURA) - 1)]
+                logger.warning(f"⚠️ La API de email no respondió ({url.split('/v1/', 1)[-1]}, {type(e).__name__}): "
+                               f"intento {intento + 2} de {INTENTOS_LECTURA} en {espera} s")
+                time.sleep(espera)
+
     # ==================================================
     # 📋 CONTACTOS
     # ==================================================
@@ -129,9 +191,9 @@ class EmailClient:
             data["email"] = email
         if list_id:
             data["listId"] = list_id
-        
+
         try:
-            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
+            resp = self._leer("POST", url, data=data)
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -187,7 +249,7 @@ class EmailClient:
     # 📋 LISTAS DE CONTACTOS
     # ==================================================
 
-    def crear_lista(self, nombre: str) -> Dict:
+    def crear_lista(self, nombre: str, _reintento: bool = False) -> Dict:
         """
         Crea una lista de contactos.
         POST /v1/listscontacts/create
@@ -202,9 +264,15 @@ class EmailClient:
             if result.get("status") == "ok":
                 return {"success": True, "data": result.get("data", {})}
             elif result.get("status") == "error":
-                if result.get("code", {}).get("name", [""])[0] == "is_used":
-                    logger.warning(f"⚠️ Lista ya existe: {nombre}")
-                    return {"success": True, "data": {"name": nombre}, "ya_existe": True}
+                codigo = result.get("code") or {}
+                nombre_err = codigo.get("name") if isinstance(codigo, dict) else None
+                if isinstance(nombre_err, list):
+                    nombre_err = nombre_err[0] if nombre_err else None
+                if nombre_err == "is_used" and not _reintento:
+                    # El nombre ya existe en la cuenta: otro intento con sufijo (la
+                    # lista existente no sirve, el envío necesita su id).
+                    logger.warning(f"⚠️ Lista ya existe: {nombre}; se crea con otro nombre")
+                    return self.crear_lista(f"{nombre}_{uuid4().hex[:6]}", _reintento=True)
                 raise EmailClientError(_error_api(result.get("code", "Error")))
             return {"success": False, "error": result}
         
@@ -305,9 +373,9 @@ class EmailClient:
             data["filter"] = filtro
         if status:
             data["status"] = status
-        
+
         try:
-            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
+            resp = self._leer("POST", url, data=data)
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -325,7 +393,7 @@ class EmailClient:
         url = f"{BASE_URL}/campaign/{campana_id}"
 
         try:
-            resp = self.session.get(url, timeout=(TIMEOUT_CONEXION, 60))
+            resp = self._leer("GET", url, timeout=(TIMEOUT_CONEXION, 60))
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -342,9 +410,9 @@ class EmailClient:
         """
         url = f"{BASE_URL}/campaign/checkstatus"
         data = {"id": campana_id}
-        
+
         try:
-            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
+            resp = self._leer("POST", url, data=data)
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -361,9 +429,9 @@ class EmailClient:
         
         if email:
             data["email"] = email
-        
+
         try:
-            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
+            resp = self._leer("POST", url, data=data)
             result = resp.json()
             
             if result.get("status") == "ok":
@@ -380,17 +448,25 @@ class EmailClient:
         """
         url = f"{BASE_URL}/customfields/getall"
         data = {"limit": "100"}
-        
+
         try:
-            resp = self.session.post(url, data=data, timeout=(TIMEOUT_CONEXION, TIMEOUT_RESPUESTA))
+            resp = self._leer("POST", url, data=data)
             result = resp.json()
-            
+
             if result.get("status") == "ok":
-                return {"success": True, "data": result.get("data", {}).get("data", [])}
+                campos = result.get("data", {}).get("data", [])
+                _guardar_campos(self.api_key, campos)
+                return {"success": True, "data": campos}
             raise EmailClientError(_error_api(result.get("code", "Error")))
-        
+
         except requests.exceptions.RequestException as e:
-            raise EmailClientError(f"Error de red: {e}")       
+            # La API no respondió: los campos casi nunca cambian, se usan los últimos leídos.
+            campos, fecha = _campos_guardados(self.api_key)
+            if campos:
+                logger.warning(f"⚠️ La API de email no entregó los campos personalizados ({type(e).__name__}): "
+                               f"se usan los últimos leídos ({fecha}).")
+                return {"success": True, "data": campos, "guardados": fecha}
+            raise EmailClientError(f"Error de red: {e}")
     def crear_campo_personalizado(self, nombre: str, tipo: str = "Text field") -> Dict:
         """
         Crea un campo personalizado en la plataforma.

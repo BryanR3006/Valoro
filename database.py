@@ -44,6 +44,7 @@ def _ensure_programacion_sms_columns():
         "intervalo_minutos": "INTEGER",
         "hora_fin": "TEXT",
         "link": "TEXT",
+        "ultimo_intento": "DATETIME",
     })
 
 
@@ -61,6 +62,7 @@ def _ensure_programacion_email_columns():
         "fecha_fin": "TEXT",
         "intervalo_minutos": "INTEGER",
         "hora_fin": "TEXT",
+        "ultimo_intento": "DATETIME",
     })
 
 
@@ -177,6 +179,10 @@ class ProgramacionSms(db.Model):
     link_whatsapp = db.Column(db.Text, nullable=True)
     # Mensaje del último error de ejecución (estado 'error'), visible en la lista.
     ultimo_error = db.Column(db.Text, nullable=True)
+    # Recurrente: último turno que se intentó (hora de Colombia), salga bien o mal.
+    # Un turno que falla no se repite (podría duplicar lo que alcanzó a salir) y
+    # la recurrente sigue con el siguiente turno. Reintentar lo borra.
+    ultimo_intento = db.Column(db.DateTime, nullable=True)
     # SMS enviados en la última ejecución (lo muestra Inicio).
     ultimo_enviados = db.Column(db.Integer, nullable=True)
     # ID del mensaje y de la campaña (del constructor): van en el payload de Infobip.
@@ -227,6 +233,10 @@ class ProgramacionEmail(db.Model):
     estado = db.Column(db.String(20), nullable=False, default='pendiente')
     # Mensaje del último error (estado 'error'), visible en la lista.
     ultimo_error = db.Column(db.Text, nullable=True)
+    # Recurrente: último turno que se intentó (hora de Colombia), salga bien o mal.
+    # Un turno que falla no se repite (podría duplicar lo que alcanzó a salir) y
+    # la recurrente sigue con el siguiente turno. Reintentar lo borra.
+    ultimo_intento = db.Column(db.DateTime, nullable=True)
     # Emails enviados en la última ejecución y cuándo (lo muestra Inicio).
     ultimo_enviados = db.Column(db.Integer, nullable=True)
     fecha_ejecucion = db.Column(db.DateTime, nullable=True)

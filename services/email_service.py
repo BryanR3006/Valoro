@@ -12,6 +12,7 @@ import pandas as pd
 
 from datos_personales import enmascarar_email
 from services.email_client import EmailTimeoutError
+from services.errores import marcar_claro
 from services.variables import buscar_columna, es_nombre
 
 logger = logging.getLogger(__name__)
@@ -523,9 +524,9 @@ def _crear_campana(client, datos: Dict, lista_id) -> int:
             if lista_id in [m.get("id") for m in detalle.get("maillists") or []]:
                 logger.info(f"✅ La campaña sí quedó creada: ID {encontrada['id']}")
                 return encontrada["id"]
-        raise EmailServiceError(
+        raise marcar_claro(EmailServiceError(
             "La API de email no respondió a tiempo y la campaña no quedó creada: no se envió nada. "
-            "Intente de nuevo en unos minutos.") from exc
+            "Intente de nuevo en unos minutos.")) from exc
     if not resultado.get("success") or not resultado.get("data", {}).get("id"):
         raise EmailServiceError("No se pudo crear la campaña")
     return resultado["data"]["id"]
@@ -561,9 +562,9 @@ def verificar_campana_enviada(client, campana_id, intentos: int = 6, espera: int
             f"La campaña {campana_id} quedó en borrador (Draft) en la plataforma de email: no se envió. "
             "Revísela allá o intente de nuevo.")
     if status == "desconocido":
-        raise EmailServiceError(
+        raise marcar_claro(EmailServiceError(
             f"No se pudo confirmar que la campaña {campana_id} salió (la API de email no respondió). "
-            "Revise en la plataforma antes de reintentar, para no duplicar.")
+            "Revise en la plataforma antes de reintentar, para no duplicar."))
     if not destinatarios and status == "Completed":
         raise EmailServiceError(f"La campaña {campana_id} terminó (Completed) sin destinatarios: no llegó a nadie.")
     return {"status": status, "recipients_count": destinatarios}
@@ -612,7 +613,9 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
             f"Estas variables no tienen campo personalizado en la cuenta de email y saldrían "
             f"como texto: {', '.join(sin_campo)}. Créalas en la cuenta o quítalas de la plantilla.")
 
-    lista = client.crear_lista(f"API_Email_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    # El nombre lleva un sufijo al azar: dos envíos en el mismo segundo (p. ej. dos
+    # programaciones del mismo turno) chocaban con 'is_used'.
+    lista = client.crear_lista(f"API_Email_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}")
     if not lista.get("success"):
         raise EmailServiceError("No se pudo crear la lista de contactos")
     lista_id = lista["data"]["id"]

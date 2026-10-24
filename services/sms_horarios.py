@@ -119,3 +119,34 @@ def turnos_del_dia(horas, ejecuciones, ahora, desde=None, margen_min=MARGEN_TURN
     for resto in por_turno.values():
         resultado.extend(resto)
     return sorted(resultado, key=lambda t: t.get("turno") or t.get("a_las") or "")
+
+
+def texto_pendientes(programaciones, maximo=2):
+    """
+    Línea de la consola con los turnos que faltan hoy, a partir de las filas de
+    Inicio (canal, campana, turnos con su resultado): "⏳ Pendientes hoy: 6
+    turnos (4 SMS, 2 email) · próximo 16:00: SMS 'MOM5 …', email 'MOM6 …'".
+    Los turnos que pasaron sin correr (no_corrio) van al final como aviso.
+    """
+    def canal(c):
+        return "SMS" if c == "sms" else "email"
+
+    pendientes, sin_correr = [], 0
+    for prog in programaciones:
+        for turno in prog.get("turnos") or []:
+            if turno.get("resultado") == "pendiente":
+                pendientes.append((turno.get("turno") or "", prog.get("canal"),
+                                   prog.get("campana") or str(prog.get("id"))))
+            elif turno.get("resultado") == "no_corrio":
+                sin_correr += 1
+    aviso = f" · ⚠️ {sin_correr} turnos de hoy no corrieron (ver Inicio)" if sin_correr else ""
+    if not pendientes:
+        return "⏳ No quedan programaciones pendientes hoy." + aviso
+    por_canal = {c: sum(1 for _, k, _ in pendientes if k == c) for c in ("sms", "email")}
+    proximo = min(hora for hora, _, _ in pendientes)
+    a_esa_hora = [f"{canal(c)} '{nombre}'" for hora, c, nombre in pendientes if hora == proximo]
+    siguientes = ", ".join(a_esa_hora[:maximo])
+    if len(a_esa_hora) > maximo:
+        siguientes += f" y {len(a_esa_hora) - maximo} más"
+    canales = ", ".join(f"{n} {canal(c)}" for c, n in por_canal.items() if n)
+    return f"⏳ Pendientes hoy: {len(pendientes)} turnos ({canales}) · próximo {proximo}: {siguientes}{aviso}"

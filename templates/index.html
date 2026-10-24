@@ -72,9 +72,14 @@
 
   .inicio-accesos { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 22px; }
 
+  /* Actividad en vivo: la consola ocupa todo el alto de su tarjeta (el de la tabla
+     de al lado) y hace scroll por dentro; no crece con las líneas. */
+  .card-logs { display: flex; flex-direction: column; }
   .logs-panel {
-    max-height: 280px;
+    flex: 1 1 0;
+    min-height: 320px;
     overflow-y: auto;
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
     font-family: 'Consolas', 'Monaco', monospace;
     font-size: 11px;
     background: var(--valoro-fondo);
@@ -83,6 +88,7 @@
     margin: 0;
     line-height: 1.6;
   }
+  @media (max-width: 1100px) { .logs-panel { flex: none; height: 460px; } }
   .log-warning { color: var(--valoro-oro); }
   .log-error { color: #ff8a80; }
 </style>
@@ -181,7 +187,7 @@
     </div>
   </div>
 
-  <div class="card">
+  <div class="card card-logs">
     <div class="card-header">
       <h3><i class="fas fa-terminal"></i> Actividad en vivo</h3>
       <button class="btn btn-outline-secondary btn-sm" onclick="cargarLogs()" title="Actualizar"><i class="fas fa-sync-alt"></i></button>
@@ -339,12 +345,19 @@ function cargarLogs() {
         logsPanel.innerHTML = '<div>No hay logs disponibles</div>';
         return;
       }
+      // Baja solo a lo más reciente, salvo que la persona haya subido a leer algo.
+      const alFinal = !logsPanel.dataset.listo ||
+        logsPanel.scrollHeight - logsPanel.scrollTop - logsPanel.clientHeight < 40;
       logsPanel.innerHTML = logs.map(log => {
         let clase = '';
-        if (log.includes('ERROR')) clase = 'log-error';
-        else if (log.includes('WARNING')) clase = 'log-warning';
+        // Líneas claras (consola.py): "14:26:49  ❌ …" error, "⚠️ …" aviso (según cómo empieza).
+        const texto = log.replace(/^\d{2}:\d{2}:\d{2}\s+/, '');
+        if (texto.startsWith('❌')) clase = 'log-error';
+        else if (texto.startsWith('⚠')) clase = 'log-warning';
         return `<div class="${clase}">${escapeHtml(log)}</div>`;
       }).join('');
+      if (alFinal) logsPanel.scrollTop = logsPanel.scrollHeight;
+      logsPanel.dataset.listo = '1';
     })
     .catch(() => {
       document.getElementById('logsPanel').innerHTML = '<div class="log-error">No se pudieron cargar los logs.</div>';
