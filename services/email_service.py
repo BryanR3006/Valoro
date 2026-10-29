@@ -13,7 +13,7 @@ import pandas as pd
 from datos_personales import enmascarar_email
 from services.email_client import EmailTimeoutError
 from services.errores import marcar_claro
-from services.variables import buscar_columna, es_nombre
+from services.variables import COLUMNA_ID_CAMPANA, COLUMNA_ID_MENSAJE, buscar_columna, es_nombre, poner_ids
 
 logger = logging.getLogger(__name__)
 
@@ -121,11 +121,11 @@ def preview_email(rows: List[Dict], plantilla: str, asunto: str, limit: int = 3)
         return {"success": False, "message": str(e)}
 
 
-# Filas de EmailLog por INSERT (14 parámetros por fila; BigQuery admite 10.000).
+# Filas de EmailLog por INSERT (16 parámetros por fila; BigQuery admite 10.000).
 FILAS_POR_INSERT = 300
 _COLUMNAS_EMAIL_LOG = ("id", "email", "asunto", "contenido", "campana_id", "campana_nombre", "fecha_envio",
                        "resultado", "bulk_id", "error", "campana", "usuario", "fecha_creacion",
-                       "fecha_actualizacion")
+                       "fecha_actualizacion", "id_mensaje", "id_campana")
 _FECHAS_EMAIL_LOG = {"fecha_envio", "fecha_creacion", "fecha_actualizacion"}
 
 
@@ -297,6 +297,33 @@ def campo_de(nombre: str, mapeo: Dict[str, int]) -> Optional[int]:
             if alias in mapeo:
                 return mapeo[alias]
     return None
+
+
+def campos_ids(mapeo: Dict[str, int], id_mensaje: str = "", id_campana: str = "") -> Dict[int, str]:
+    """
+    CustomField -> ID asignado (plantilla o pantalla), igual para todos los
+    contactos: gana sobre lo que traiga la consulta en ese campo. Lanza
+    EmailServiceError si la cuenta no tiene el campo (el ID no saldría en el reporte).
+    """
+    campos = {}
+    for columna, alias, valor in ((COLUMNA_ID_MENSAJE, "id_mensaje", id_mensaje),
+                                  (COLUMNA_ID_CAMPANA, "id_campana", id_campana)):
+        valor = str(valor or "").strip()
+        if not valor:
+            continue
+        campo_id = campo_de(columna, mapeo) or campo_de(alias, mapeo)
+        if campo_id is None:
+            raise EmailServiceError(
+                f"La cuenta de email no tiene el campo personalizado '{columna}': créalo en la cuenta "
+                f"para que el ID se suba con cada contacto, o quita el ID del envío.")
+        campos[campo_id] = valor
+    return campos
+
+
+def id_de_fila(row: Dict, columna: str) -> str:
+    """Valor de la columna 'Id Mensaje' / 'Id Campaña' de la fila (con poner_ids, el asignado)."""
+    encontrada = buscar_columna(columna, row.keys())
+    return "" if encontrada is None or _vacio(row[encontrada]) else str(row[encontrada]).strip()
 
 
 def variables_sin_campo(plantilla: str, asunto: str, mapeo: Dict[str, int]) -> List[str]:
@@ -479,15 +506,17 @@ def suscribir_en_bloques(client, contact_ids: List[int], lista_id, tamano: int =
 
 
 def _cargar_contacto(client, email: str, row: Dict, mapeo: Dict[str, int],
-                     directorio: Optional[Dict[str, int]]) -> int:
+                     directorio: Optional[Dict[str, int]], fijos: Optional[Dict[int, str]] = None) -> int:
     """
     Deja el contacto en la cuenta con los datos de esta fila y devuelve su id.
     Si ya existe se actualizan sus campos (contacts/edit): un llamado, y no se
     pierde su historial ni si se dio de baja. Si es nuevo se crea.
+    fijos: campos con el mismo valor para todos (los IDs asignados, campos_ids).
     """
+    fijos = fijos or {}
     contact_id = (directorio or {}).get(email.lower())
     if not contact_id:
-        resultado = client.crear_contacto(email, campos_de_fila(row, mapeo))
+        resultado = client.crear_contacto(email, {**campos_de_fila(row, mapeo), **fijos})
         if not resultado.get("success"):
             raise EmailServiceError(str(resultado.get("error", "Error creando contacto")))
         contact_id = resultado.get("data", {}).get("id")
@@ -501,7 +530,7 @@ def _cargar_contacto(client, email: str, row: Dict, mapeo: Dict[str, int],
         if not (exacto or encontrados):
             raise EmailServiceError("Contacto existente no encontrado")
         contact_id = (exacto or encontrados)[0]["id"]
-    campos = campos_de_fila(row, mapeo, con_vacios=True)
+    campos = {**campos_de_fila(row, mapeo, con_vacios=True), **fijos}
     if campos:
         client.editar_contacto(contact_id, campos)
     return contact_id
@@ -586,12 +615,16 @@ def _revisar_horario_envio(campana: str) -> None:
 def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: str, campana: str,
                          usuario: str, reply_email: str, confirmar_reenvio: bool,
                          email_config: Dict, email_client=None,
-                         progreso: Optional[Callable[[int, int, int], None]] = None) -> Dict:
+                         progreso: Optional[Callable[[int, int, int], None]] = None,
+                         id_mensaje: str = "", id_campana: str = "") -> Dict:
     """
     Envía una campaña de email a las filas dadas: filtros (lista negra y
     duplicados del día), validación de variables, contactos, lista, campaña,
     envío y EmailLog. Lanza EmailServiceError (o ErrorListaNegraEmail) si no se puede.
     progreso(hechos, total, con_error) se llama mientras se cargan los contactos.
+    id_mensaje / id_campana (de la plantilla o la pantalla) reemplazan los de la
+    consulta: van a los campos Id Mensaje / Id Campaña de cada contacto (salen
+    en el reporte de la plataforma) y a EmailLog. Vacíos: quedan los de la consulta.
     """
     from services.email_client import EmailClient
 
@@ -605,6 +638,8 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
     if not plantilla:
         raise EmailServiceError("La plantilla (HTML) es obligatoria.")
 
+    # Antes de los filtros: los señuelos copian la fila de un cliente y llevan los mismos IDs.
+    rows = [poner_ids(r, id_mensaje, id_campana) for r in rows]
     filtro = filtrar_destinatarios(client_bq, rows, confirmar_reenvio, senuelos_email(email_config))
     destinatarios, email_column = filtro["rows"], filtro["email_column"]
     if not destinatarios:
@@ -626,6 +661,7 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
         raise EmailServiceError(
             f"Estas variables no tienen campo personalizado en la cuenta de email y saldrían "
             f"como texto: {', '.join(sin_campo)}. Créalas en la cuenta o quítalas de la plantilla.")
+    fijos = campos_ids(mapeo, id_mensaje, id_campana)
 
     # El nombre lleva un sufijo al azar: dos envíos en el mismo segundo (p. ej. dos
     # programaciones del mismo turno) chocaban con 'is_used'.
@@ -650,7 +686,7 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
         futuros = {}
         for row in destinatarios:
             email = str(row.get(email_column) or "").strip()
-            futuros[ejecutor.submit(_cargar_contacto, client, email, row, mapeo, directorio)] = (email, row)
+            futuros[ejecutor.submit(_cargar_contacto, client, email, row, mapeo, directorio, fijos)] = (email, row)
         for hechos, futuro in enumerate(as_completed(futuros), 1):
             email, row = futuros[futuro]
             try:
@@ -710,6 +746,8 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
         "usuario": usuario or "",
         "fecha_creacion": ahora,
         "fecha_actualizacion": ahora,
+        "id_mensaje": id_de_fila(row, COLUMNA_ID_MENSAJE),
+        "id_campana": id_de_fila(row, COLUMNA_ID_CAMPANA),
     } for row in enviados])
 
     return {

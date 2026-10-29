@@ -118,6 +118,7 @@ def envios_email(client, desde, hasta, destino=""):
     sql = f"""
       SELECT IFNULL(bulk_id, '') AS bulk_id, ANY_VALUE(IFNULL(NULLIF(campana, ''), campana_nombre)) AS campana,
         ANY_VALUE(IFNULL(usuario, '')) AS usuario, ANY_VALUE(asunto) AS asunto, ANY_VALUE(contenido) AS contenido,
+        IFNULL(MAX(id_mensaje), '') AS id_mensaje, IFNULL(MAX(id_campana), '') AS id_campana,
         MIN(fecha_envio) AS inicio, MAX(fecha_envio) AS fin, COUNT(*) AS mensajes,
         COUNTIF(LOWER(resultado) = 'enviado') AS enviados, COUNTIF(LOWER(resultado) != 'enviado') AS fallidos
       FROM `{EMAIL_LOG_TABLE}`
@@ -138,9 +139,9 @@ def detalle_sms(client, campana, inicio, fin):
 
 
 def detalle_email(client, bulk_id):
-    """Cada email de un envío (campaña de la plataforma de email)."""
+    """Cada email de un envío (campaña de la plataforma de email), con el ID del mensaje y de la campaña."""
     sql = f"""
-      SELECT email, asunto, fecha_envio, resultado, error FROM `{EMAIL_LOG_TABLE}`
+      SELECT email, asunto, fecha_envio, resultado, error, id_mensaje, id_campana FROM `{EMAIL_LOG_TABLE}`
       WHERE bulk_id = @bulk_id ORDER BY email LIMIT {MAX_DETALLE}"""
     config = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("bulk_id", "STRING", bulk_id)])
     return [dict(f.items()) for f in client.query(sql, job_config=config).result()]

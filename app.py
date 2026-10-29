@@ -1431,6 +1431,21 @@ def _faltantes_email(data, *, con_nombre=True, con_asunto=True, con_fecha=False)
     return faltan
 
 
+def _ids_email(data):
+    """
+    (id_mensaje, id_campana) del envío o programación de email (vienen de la
+    plantilla y se pueden cambiar en pantalla). Vacíos = quedan los de la consulta.
+    """
+    return tuple(str(data.get(campo) or "").strip()[:100] for campo in ("id_mensaje", "id_campana"))
+
+
+def _filas_con_ids_email(rows, data):
+    """Filas de la consulta con los IDs asignados (para validar variables y la vista previa)."""
+    from services.variables import poner_ids
+    id_mensaje, id_campana = _ids_email(data)
+    return [poner_ids(r, id_mensaje, id_campana) for r in rows]
+
+
 # ==================== EMAIL - PREVIEW ====================
 
 @app.route("/api/email/preview", methods=["POST"])
@@ -1448,6 +1463,7 @@ def email_preview():
         rows, error_response = _get_sms_rows(query)
         if error_response:
             return error_response
+        rows = _filas_con_ids_email(rows, data)
         from services.email_service import validar_variables_plantilla
         validacion = validar_variables_plantilla(rows, plantilla, asunto)
         if not validacion["valido"]:
@@ -1501,6 +1517,7 @@ def email_validar():
         rows, error_response = _get_sms_rows(query)
         if error_response:
             return error_response
+        rows = _filas_con_ids_email(rows, data)
 
         try:
             from services.email_service import senuelos_email
@@ -1589,10 +1606,11 @@ def email_send():
         nombre = f"Email '{campana_nombre}' (envío de {usuario or 'sin usuario'})"
         log_activity(f"📋 {nombre}: BigQuery trajo {len(rows)} registros · revisando lista negra y "
                      f"enviados de hoy, cargando contactos…")
+        id_mensaje, id_campana = _ids_email(data)
         resultado = enviar_campana_email(
             bq_client, rows, plantilla, asunto, _campana_con_plantilla(campana_nombre, plantilla_guardada),
             usuario, reply_email, confirmar_reenvio, load_config().get("email", {}),
-            progreso=_progreso_email(campana_nombre),
+            progreso=_progreso_email(campana_nombre), id_mensaje=id_mensaje, id_campana=id_campana,
         )
         _registrar_uso_plantilla_email(plantilla_guardada)
         log_gui_action("Envio Email", campana_id=resultado["campana_id"], enviados=resultado["enviados"])
@@ -1687,6 +1705,7 @@ def email_schedule():
         rows, error_response = _get_sms_rows(query)
         if error_response:
             return error_response
+        rows = _filas_con_ids_email(rows, data)
 
         from services.email_service import validar_variables_plantilla
         # Sin filas hoy no es error en una recurrente: cada turno vuelve a leer la base.
@@ -1701,11 +1720,13 @@ def email_schedule():
                 f"{', '.join(sin_campo)}. Créalas en la cuenta o quítalas de la plantilla."}), 400
 
         plantilla_guardada = _plantilla_email_del_envio(data)
+        id_mensaje, id_campana = _ids_email(data)
         from database import ProgramacionEmail
         prog = ProgramacionEmail(
             id=str(uuid4()), consulta_sql=query, plantilla=plantilla, asunto=asunto,
             campana=_campana_con_plantilla(campana_nombre, plantilla_guardada) or "",
-            usuario=usuario, reply_email=reply_email, estado="pendiente", **horario,
+            usuario=usuario, reply_email=reply_email, estado="pendiente",
+            id_mensaje=id_mensaje or None, id_campana=id_campana or None, **horario,
         )
         db.session.add(prog)
         db.session.commit()
@@ -1921,6 +1942,7 @@ def execute_email_schedule(schedule_id: str):
                     bq_client, fetched["rows"], prog.plantilla, prog.asunto or "",
                     prog.campana or "", prog.usuario or "sistema", prog.reply_email or "",
                     False, load_config().get("email", {}), progreso=_progreso_email(campana),
+                    id_mensaje=prog.id_mensaje or "", id_campana=prog.id_campana or "",
                 )
             except SinDestinatariosEmail as exc:
                 # Sin datos no es una falla: queda con 0 enviados y la recurrente sigue.
@@ -2075,6 +2097,11 @@ def email_editar_programacion(schedule_id):
         prog.plantilla = data["plantilla"].strip()
         prog.reply_email = (data.get("reply_email") or "").strip()
         prog.usuario = (data.get("usuario") or "").strip()
+        id_mensaje, id_campana = _ids_email(data)
+        if "id_mensaje" in data:
+            prog.id_mensaje = id_mensaje or None
+        if "id_campana" in data:
+            prog.id_campana = id_campana or None
         for campo, valor in horario.items():
             setattr(prog, campo, valor)
         prog.estado = "pendiente"
@@ -2192,7 +2219,7 @@ def email_plantillas_listar():
 
 
 def _leer_plantilla_formulario():
-    """(nombre, asunto, html, momento, usuario, errores) del JSON recibido."""
+    """(nombre, asunto, html, momento, usuario, ids, errores) del JSON recibido. ids: id_mensaje e id_campana."""
     from services.email_service import errores_plantilla
     data = request.get_json(silent=True) or {}
     nombre = re.sub(r"\s+", " ", str(data.get("nombre") or "")).strip()
@@ -2200,7 +2227,9 @@ def _leer_plantilla_formulario():
     html = str(data.get("html") or "").strip()
     momento = str(data.get("momento") or "").strip() or None
     usuario = usuario_sesion() or str(data.get("usuario") or "").strip() or None
-    return nombre, asunto, html, momento, usuario, errores_plantilla(nombre, asunto, html)
+    id_mensaje, id_campana = _ids_email(data)
+    ids = {"id_mensaje": id_mensaje or None, "id_campana": id_campana or None}
+    return nombre, asunto, html, momento, usuario, ids, errores_plantilla(nombre, asunto, html)
 
 
 def _nombre_plantilla_repetido(nombre, excepto_id=None):
@@ -2217,12 +2246,13 @@ def _nombres_plantillas():
 @app.route("/api/email/plantillas", methods=["POST"])
 def email_plantillas_crear():
     from database import PlantillaEmail
-    nombre, asunto, html, momento, usuario, errores = _leer_plantilla_formulario()
+    nombre, asunto, html, momento, usuario, ids, errores = _leer_plantilla_formulario()
     if not errores and _nombre_plantilla_repetido(nombre):
         errores.append(f"Ya existe una plantilla llamada '{nombre}'.")
     if errores:
         return jsonify({"success": False, "message": " ".join(errores)}), 400
-    plantilla = PlantillaEmail(nombre=nombre, momento=momento, asunto=asunto, html=html, usuario=usuario, activa=True)
+    plantilla = PlantillaEmail(nombre=nombre, momento=momento, asunto=asunto, html=html, usuario=usuario,
+                               activa=True, **ids)
     db.session.add(plantilla)
     db.session.commit()
     log_activity(f"📧 Plantilla de email creada (id {plantilla.id}): {nombre}")
@@ -2240,12 +2270,15 @@ def email_plantillas_editar(plantilla_id):
     plantilla = db.session.get(PlantillaEmail, plantilla_id)
     if not plantilla:
         return jsonify({"success": False, "message": "Plantilla no encontrada."}), 404
-    nombre, asunto, html, momento, usuario, errores = _leer_plantilla_formulario()
+    nombre, asunto, html, momento, usuario, ids, errores = _leer_plantilla_formulario()
     if errores:
         return jsonify({"success": False, "message": " ".join(errores)}), 400
+    # Una pantalla que no manda los IDs no los borra.
+    datos = request.get_json(silent=True) or {}
+    ids = {campo: valor if campo in datos else getattr(plantilla, campo) for campo, valor in ids.items()}
     cambia_contenido = asunto != (plantilla.asunto or "") or html != plantilla.html
     if plantilla.usos and cambia_contenido:
-        if not (request.get_json(silent=True) or {}).get("como_nueva"):
+        if not datos.get("como_nueva"):
             return jsonify({
                 "success": False, "requiere_nueva": True,
                 "nombre_nueva": nombre_libre(nombre, _nombres_plantillas(), "v"),
@@ -2253,7 +2286,7 @@ def email_plantillas_editar(plantilla_id):
                            "¿Guardar los cambios como una plantilla nueva?",
             }), 409
         nueva = PlantillaEmail(nombre=nombre_libre(nombre, _nombres_plantillas(), "v"), momento=momento,
-                               asunto=asunto, html=html, usuario=usuario, activa=True)
+                               asunto=asunto, html=html, usuario=usuario, activa=True, **ids)
         db.session.add(nueva)
         db.session.commit()
         log_activity(f"📧 Plantilla de email '{plantilla.nombre}' guardada como nueva: {nueva.nombre}")
@@ -2261,6 +2294,8 @@ def email_plantillas_editar(plantilla_id):
     if _nombre_plantilla_repetido(nombre, excepto_id=plantilla.id):
         return jsonify({"success": False, "message": f"Ya existe una plantilla llamada '{nombre}'."}), 400
     plantilla.nombre, plantilla.asunto, plantilla.html, plantilla.momento = nombre, asunto, html, momento
+    # Los IDs no cambian lo enviado (quedan en la programación y en EmailLog): se editan sin crear "v2".
+    plantilla.id_mensaje, plantilla.id_campana = ids["id_mensaje"], ids["id_campana"]
     if usuario:
         plantilla.usuario = usuario
     db.session.commit()
@@ -2277,7 +2312,8 @@ def email_plantillas_duplicar(plantilla_id):
         return jsonify({"success": False, "message": "Plantilla no encontrada."}), 404
     usuario = usuario_sesion() or str((request.get_json(silent=True) or {}).get("usuario") or "").strip() or original.usuario
     copia = PlantillaEmail(nombre=nombre_libre(original.nombre, _nombres_plantillas(), "copia "),
-                           momento=original.momento, asunto=original.asunto, html=original.html, usuario=usuario, activa=True)
+                           momento=original.momento, asunto=original.asunto, html=original.html, usuario=usuario,
+                           activa=True, id_mensaje=original.id_mensaje, id_campana=original.id_campana)
     db.session.add(copia)
     db.session.commit()
     log_activity(f"📧 Plantilla de email duplicada: {original.nombre} -> {copia.nombre}")
@@ -2519,6 +2555,7 @@ def api_envios():
                     "canal": "email", "campana": e["campana"] or "", "usuario": e["usuario"],
                     "inicio": _a_colombia(e["inicio"]), "fin": _a_colombia(e["fin"]),
                     "mensaje": e["asunto"] or "", "ejemplo": e["contenido"] or "", "consulta": "",
+                    "id_mensaje": e["id_mensaje"], "id_campana": e["id_campana"],
                     "mensajes": e["mensajes"], "entregados": None, "fallidos": e["fallidos"],
                     "pendientes": None, "sin_reporte": None, "costo": None,
                     "bulk_ids": [e["bulk_id"]] if e["bulk_id"] else [], "campana_id": e["bulk_id"],
@@ -2540,7 +2577,8 @@ def _detalle_envio():
     if request.args.get("canal") == "email":
         filas = historial_envios.detalle_email(bq_client, request.args.get("campana_id") or "")
         return [{"destino": f["email"], "fecha": _a_colombia(f["fecha_envio"]), "estado": f["resultado"] or "",
-                 "error": f["error"] or "", "mensaje": f["asunto"] or ""} for f in filas]
+                 "error": f["error"] or "", "mensaje": f["asunto"] or "",
+                 "id_mensaje": f["id_mensaje"] or "", "id_campana": f["id_campana"] or ""} for f in filas]
     inicio = datetime.fromisoformat(request.args["inicio_utc"])
     fin = datetime.fromisoformat(request.args["fin_utc"])
     filas = historial_envios.detalle_sms(bq_client, request.args.get("campana") or "", inicio, fin)
@@ -2577,7 +2615,10 @@ def api_envios_exportar():
         return jsonify({"success": False, "message": "Faltan los datos del envío."}), 400
     salida = io.StringIO()
     salida.write("﻿")
-    columnas = ["destino", "fecha", "estado", "estado_infobip", "error", "costo", "mensaje", "bulk_id", "message_id"]
+    if request.args.get("canal") == "email":
+        columnas = ["destino", "fecha", "estado", "error", "mensaje", "id_mensaje", "id_campana"]
+    else:
+        columnas = ["destino", "fecha", "estado", "estado_infobip", "error", "costo", "mensaje", "bulk_id", "message_id"]
     escritor = csv.DictWriter(salida, fieldnames=columnas, delimiter=";", extrasaction="ignore")
     escritor.writeheader()
     escritor.writerows(filas)

@@ -222,7 +222,7 @@
     const origen = $('fOrigen').value, q = $('fBuscar').value.trim().toLowerCase();
     return TODOS.filter(e =>
       (!origen || e.origen.tipo === origen) &&
-      (!q || `${e.campana} ${e.mensaje} ${e.usuario} ${(e.bulk_ids || []).join(' ')}`.toLowerCase().includes(q)));
+      (!q || `${e.campana} ${e.mensaje} ${e.usuario} ${(e.bulk_ids || []).join(' ')} ${e.id_mensaje || ''} ${e.id_campana || ''}`.toLowerCase().includes(q)));
   }
 
   function pintarCifras(lista) {
@@ -328,6 +328,7 @@
         <div class="he-bloque-titulo">Consulta</div><div class="he-texto he-sql">${esc(e.consulta) || '—'}</div>`;
     } else {
       html += `${dato('Campaña en la plataforma de email', esc(e.campana_id) || '—')}
+        ${dato('ID del mensaje', esc(e.id_mensaje) || '—')}${dato('ID de la campaña', esc(e.id_campana) || '—')}
         <div id="verEstadoEmail" style="grid-column:1/-1;"><span>Estado en la plataforma de email</span><i class="fas fa-spinner fa-spin"></i> Consultando...</div></div>
         <div class="he-bloque-titulo">Asunto</div><div class="he-texto">${esc(e.mensaje) || '—'}</div>
         <div class="he-bloque-titulo">Contenido (ejemplo con los datos del primer cliente)</div><iframe class="he-html" sandbox="" id="verHtml"></iframe>`;

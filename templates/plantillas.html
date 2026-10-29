@@ -150,6 +150,16 @@
                 <input class="form-control" id="eMomento" list="listaMomentos" maxlength="100" placeholder="Ej. Primer Momento">
               </div>
             </div>
+            <div class="fila">
+              <div class="sms-field">
+                <label>ID del mensaje</label>
+                <input class="form-control" id="eIdMensaje" maxlength="100" placeholder="Ej: MC01">
+              </div>
+              <div class="sms-field">
+                <label>ID de la campaña</label>
+                <input class="form-control" id="eIdCampana" maxlength="100" placeholder="Ej: CAMP-2026-10">
+              </div>
+            </div>
             <div class="sms-field">
               <label>Asunto</label>
               <input class="form-control" id="eAsunto" maxlength="255" placeholder="Hola {{ '{{' }}nombre{{ '}}' }}, ...">
@@ -277,7 +287,7 @@
     const q = $('fBuscar').value.trim().toLowerCase(), momento = $('fMomento').value, inactivas = $('fInactivas').checked;
     return lista.filter(p =>
       (inactivas || activa(p)) && (!momento || momentoDe(p) === momento) &&
-      (!q || (canal === 'email' ? `${p.nombre} ${p.asunto} ${p.momento}` : `${p.mensaje} ${p.momento} ${p.id_mensaje} ${p.id_campana}`).toLowerCase().includes(q)));
+      (!q || (canal === 'email' ? `${p.nombre} ${p.asunto} ${p.momento} ${p.id_mensaje} ${p.id_campana}` : `${p.mensaje} ${p.momento} ${p.id_mensaje} ${p.id_campana}`).toLowerCase().includes(q)));
   }
 
   function pintarMomentos() {
@@ -311,6 +321,7 @@
         <span class="meta"><span class="badge badge-info">${esc(momentoDe(p))}</span>
           ${p.activa ? '' : '<span class="badge badge-secondary">Inactiva</span>'}
           ${p.usos ? `usada ${p.usos} ${p.usos === 1 ? 'vez' : 'veces'}` : 'sin usar'}</span>
+        <span class="meta">ID mensaje: <b>${esc(p.id_mensaje) || '—'}</b> · ID campaña: <b>${esc(p.id_campana) || '—'}</b></span>
       </div>
       <div class="gp-acciones">
         ${btn('ver', i, 'fa-expand', 'Ver')}
@@ -428,6 +439,7 @@
       $('verTitulo').textContent = p.nombre;
       $('verMeta').innerHTML = `<div><strong>Asunto:</strong> ${esc(p.asunto) || '(Sin asunto)'}</div>
         <div><strong>Momento:</strong> ${esc(momentoDe(p))} · ${p.activa ? 'Activa' : 'Inactiva'} · ${p.usos ? 'usada ' + p.usos + ' veces' : 'sin usar'}</div>
+        <div><strong>ID mensaje:</strong> ${esc(p.id_mensaje) || '—'} · <strong>ID campaña:</strong> ${esc(p.id_campana) || '—'}</div>
         ${p.variables && p.variables.length ? `<div><strong>Variables:</strong> ${p.variables.map(v => `<span class="badge badge-secondary">${esc(v)}</span>`).join(' ')}</div>` : ''}`;
       $('verCuerpo').innerHTML = '<div class="gp-ver-marco"><iframe sandbox="allow-same-origin" title="Plantilla en grande"></iframe></div>';
       const iframe = $('verCuerpo').querySelector('iframe');
@@ -467,6 +479,8 @@
       $('editTitulo').textContent = nuevo ? 'Nueva plantilla de email' : `Editar "${p.nombre}"`;
       $('eNombre').value = nuevo ? '' : p.nombre;
       $('eMomento').value = nuevo ? ($('fMomento').value || '') : (p.momento || '');
+      $('eIdMensaje').value = nuevo ? '' : (p.id_mensaje || '');
+      $('eIdCampana').value = nuevo ? '' : (p.id_campana || '');
       $('eAsunto').value = nuevo ? '' : (p.asunto || '');
       $('eHtml').value = nuevo ? '' : (p.html || '');
     } else {
@@ -501,6 +515,7 @@
 
   async function guardarEmail(comoNueva) {
     const body = { nombre: $('eNombre').value.trim(), momento: $('eMomento').value.trim(),
+                   id_mensaje: $('eIdMensaje').value.trim(), id_campana: $('eIdCampana').value.trim(),
                    asunto: $('eAsunto').value.trim(), html: $('eHtml').value.trim() };
     if (comoNueva) body.como_nueva = true;
     const faltan = [];

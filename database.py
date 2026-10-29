@@ -63,6 +63,8 @@ def _ensure_programacion_email_columns():
         "intervalo_minutos": "INTEGER",
         "hora_fin": "TEXT",
         "ultimo_intento": "DATETIME",
+        "id_mensaje": "TEXT",
+        "id_campana": "TEXT",
     })
 
 
@@ -78,6 +80,8 @@ def _ensure_momento_columns():
                 'UPDATE "Mensajes_" SET Momento = Categoria WHERE Categoria IS NOT NULL AND Categoria != \'\''))
             db.session.commit()
     _agregar_columnas("plantillas_email", {"momento": "TEXT"})
+    # IDs que asigna el usuario; van a los campos Id Mensaje / Id Campaña de cada contacto.
+    _agregar_columnas("plantillas_email", {"id_mensaje": "TEXT", "id_campana": "TEXT"})
     # Etapa (1 a 4) de la plantilla SMS, se elige junto al momento en el constructor.
     _agregar_columnas("Mensajes_", {"Etapa": "INTEGER"})
     # IDs que asigna el usuario y viajan en el payload de Infobip.
@@ -130,6 +134,10 @@ class PlantillaEmail(db.Model):
     nombre = db.Column(db.String(120), nullable=False, unique=True)
     # Momento del cliente para el que es la plantilla (ej. "Mora corta").
     momento = db.Column(db.String(100), nullable=True)
+    # IDs que asigna el usuario; al elegir la plantilla se copian al envío
+    # (campos Id Mensaje / Id Campaña de cada contacto en la plataforma de email).
+    id_mensaje = db.Column(db.String(100), nullable=True)
+    id_campana = db.Column(db.String(100), nullable=True)
     asunto = db.Column(db.String(255), nullable=False, default='')
     html = db.Column(db.Text, nullable=False)
     activa = db.Column(db.Boolean, default=True, nullable=False)
@@ -146,6 +154,8 @@ class PlantillaEmail(db.Model):
             "id": self.id,
             "nombre": self.nombre,
             "momento": self.momento or "",
+            "id_mensaje": self.id_mensaje or "",
+            "id_campana": self.id_campana or "",
             "asunto": self.asunto or "",
             "html": self.html,
             "activa": bool(self.activa),
@@ -230,6 +240,10 @@ class ProgramacionEmail(db.Model):
     campana = db.Column(db.String(255), nullable=False, default='')
     usuario = db.Column(db.String(100), nullable=True)
     reply_email = db.Column(db.String(255), nullable=True)
+    # ID del mensaje y de la campaña (de la plantilla o la pantalla): van a los
+    # campos Id Mensaje / Id Campaña de cada contacto y a EmailLog.
+    id_mensaje = db.Column(db.String(100), nullable=True)
+    id_campana = db.Column(db.String(100), nullable=True)
     estado = db.Column(db.String(20), nullable=False, default='pendiente')
     # Mensaje del último error (estado 'error'), visible en la lista.
     ultimo_error = db.Column(db.Text, nullable=True)
@@ -265,6 +279,8 @@ class ProgramacionEmail(db.Model):
             "campana": self.campana or "",
             "usuario": self.usuario or "",
             "reply_email": self.reply_email or "",
+            "id_mensaje": self.id_mensaje or "",
+            "id_campana": self.id_campana or "",
             "estado": self.estado,
             "ultimo_error": self.ultimo_error,
             "ultimo_enviados": self.ultimo_enviados,

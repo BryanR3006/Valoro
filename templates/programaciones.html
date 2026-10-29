@@ -137,18 +137,20 @@
         <span><i class="fas fa-file-excel"></i> La base salió de un Excel: no se puede cambiar aquí y solo puede ser simple.</span>
       </div>
 
+      <!-- SMS y email: van en el reporte de Infobip / de la plataforma de email -->
+      <div class="form-row">
+        <div class="sms-field">
+          <label>ID del mensaje</label>
+          <input type="text" class="form-control" id="eIdMensaje" maxlength="100">
+        </div>
+        <div class="sms-field">
+          <label>ID de la campaña</label>
+          <input type="text" class="form-control" id="eIdCampana" maxlength="100">
+        </div>
+      </div>
+
       <!-- Solo SMS -->
       <div class="solo-canal" data-canal="sms">
-        <div class="form-row">
-          <div class="sms-field">
-            <label>ID del mensaje</label>
-            <input type="text" class="form-control" id="eIdMensaje" maxlength="100">
-          </div>
-          <div class="sms-field">
-            <label>ID de la campaña</label>
-            <input type="text" class="form-control" id="eIdCampana" maxlength="100">
-          </div>
-        </div>
         <div class="sms-field">
           <label>Link <small class="text-muted">(va en {{ '{{' }}Link{{ '}}' }} para todos)</small></label>
           <input type="url" class="form-control" id="eLink" placeholder="https://...">
@@ -358,7 +360,7 @@
       ejecutada: !!p.fecha_ejecucion, ejecucion: fmtColombia(p.fecha_ejecucion),
       enviados: p.ultimo_enviados, destinatarios: null,
       consulta: p.consulta_sql || '', origen: 'consulta',
-      idMensaje: '', idCampana: '',
+      idMensaje: p.id_mensaje || '', idCampana: p.id_campana || '',
       orden: msColombia(p.fecha_creacion),
       puedeEditar: !['enviando', 'enviado'].includes(p.estado),
       puedeCancelar: p.estado === 'pendiente',
@@ -544,7 +546,7 @@
       ${dato('Responsable', esc(p.usuario) || '—')}
       ${dato('¿Se ejecutó?', p.ejecutada ? `Sí, ${esc(p.ejecucion)}` : 'No')}
       ${dato('Enviados (última ejecución)', p.ejecutada ? `${p.enviados ?? '—'}${p.destinatarios ? ' de ' + p.destinatarios : ''}` : '—')}
-      ${p.canal === 'sms' ? dato('ID del mensaje', esc(p.idMensaje) || '—') + dato('ID de la campaña', esc(p.idCampana) || '—') : ''}
+      ${dato('ID del mensaje', esc(p.idMensaje) || '—') + dato('ID de la campaña', esc(p.idCampana) || '—')}
       ${p.canal === 'sms' && p.raw.link ? `<div style="grid-column:1/-1;"><span>Link (va en {{ '{{' }}Link{{ '}}' }})</span>${esc(p.raw.link)}</div>` : ''}
       ${p.canal === 'sms' && p.raw.confirmar_reenvio ? dato('Reenvío', 'Confirmado (no excluye duplicados del día)') : ''}
     </div>`;
@@ -609,9 +611,9 @@
     $('eConsultaCampo').style.display = excel ? 'none' : '';
     $('eExcelAviso').style.display = excel ? '' : 'none';
     $('eConsulta').value = p.consulta;
+    $('eIdMensaje').value = p.idMensaje;
+    $('eIdCampana').value = p.idCampana;
     if (sms) {
-      $('eIdMensaje').value = p.idMensaje;
-      $('eIdCampana').value = p.idCampana;
       $('eLink').value = r.link || '';
       $('eMensajeSms').value = p.mensaje;
       $('eLargoSms').textContent = `${p.mensaje.length} caracteres`;
@@ -664,6 +666,7 @@
         campana: $('eCampana').value.trim(), query: $('eConsulta').value.trim(),
         asunto: $('eAsunto').value.trim(), reply_email: $('eReply').value.trim(),
         plantilla: $('eHtml').value.trim(), usuario: $('eUsuario').value.trim(), tipo,
+        id_mensaje: $('eIdMensaje').value.trim(), id_campana: $('eIdCampana').value.trim(),
         fecha_programada: $('eFecha').value || null,
         hora_inicio: $('eHora').value || null, fecha_fin: $('eFechaFin').value || null,
         intervalo_minutos: Number($('eIntervalo').value) || null,

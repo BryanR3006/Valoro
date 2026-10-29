@@ -42,6 +42,16 @@
         </datalist>
         <small class="text-muted">Para qué momento del cliente es la plantilla. Escribe uno nuevo o elige uno.</small>
       </div>
+      <div class="form-row">
+        <div class="form-group col-sm-6">
+          <label for="plIdMensaje">ID del mensaje</label>
+          <input id="plIdMensaje" class="form-control" maxlength="100" autocomplete="off" placeholder="Ej: MC01">
+        </div>
+        <div class="form-group col-sm-6">
+          <label for="plIdCampana">ID de la campaña</label>
+          <input id="plIdCampana" class="form-control" maxlength="100" autocomplete="off" placeholder="Ej: CAMP-2026-10">
+        </div>
+      </div>
       <div class="form-group">
         <label for="plAsunto">Asunto</label>
         <input id="plAsunto" class="form-control" maxlength="255" placeholder="Ej: {{ '{{' }}nombre{{ '}}' }}, tienes una oferta para ponerte al día">
@@ -111,6 +121,7 @@
 
   const $ = id => document.getElementById(id);
   const nombreEl = $('plNombre'), momentoEl = $('plMomento'), asuntoEl = $('plAsunto'), htmlEl = $('plHtml'), usuarioEl = $('plUsuario');
+  const idMensajeEl = $('plIdMensaje'), idCampanaEl = $('plIdCampana');
   let plantillas = [];
   let editandoId = null;
 
@@ -161,7 +172,7 @@
 
   function limpiar() {
     editandoId = null;
-    nombreEl.value = momentoEl.value = asuntoEl.value = htmlEl.value = '';
+    nombreEl.value = momentoEl.value = asuntoEl.value = htmlEl.value = idMensajeEl.value = idCampanaEl.value = '';
     $('plTitulo').innerHTML = '<i class="fas fa-plus mr-1"></i> Nueva plantilla';
     $('plCancelar').classList.add('d-none');
     actualizarVista();
@@ -170,6 +181,7 @@
   function editar(p) {
     editandoId = p.id;
     nombreEl.value = p.nombre; momentoEl.value = p.momento || ''; asuntoEl.value = p.asunto; htmlEl.value = p.html;
+    idMensajeEl.value = p.id_mensaje || ''; idCampanaEl.value = p.id_campana || '';
     $('plTitulo').innerHTML = '<i class="fas fa-pen mr-1"></i> Editar plantilla';
     if (p.usos) $('plTitulo').appendChild(Object.assign(document.createElement('small'),
       { className: 'text-muted', textContent: ` (usada ${p.usos} vez/veces)` }));
@@ -179,7 +191,8 @@
   }
 
   async function guardar() {
-    const cuerpo = { nombre: nombreEl.value.trim(), momento: momentoEl.value.trim(), asunto: asuntoEl.value.trim(), html: htmlEl.value.trim(), usuario: usuarioEl.value.trim() };
+    const cuerpo = { nombre: nombreEl.value.trim(), momento: momentoEl.value.trim(), asunto: asuntoEl.value.trim(), html: htmlEl.value.trim(), usuario: usuarioEl.value.trim(),
+                     id_mensaje: idMensajeEl.value.trim(), id_campana: idCampanaEl.value.trim() };
     if (!cuerpo.nombre) { showToast('Escribe el nombre', 'warning'); return; }
     if (!cuerpo.html) { showToast('El HTML no puede estar vacío', 'warning'); return; }
     try {
@@ -231,7 +244,10 @@
       const tr = document.createElement('tr');
       if (!p.activa) tr.className = 'pl-inactiva';
       tr.appendChild(celda(p.nombre, 'font-weight-bold'));
-      tr.appendChild(celda(p.momento || '—', 'small'));
+      const tdMomento = celda(p.momento || '—', 'small');
+      if (p.id_mensaje || p.id_campana) tdMomento.appendChild(Object.assign(document.createElement('div'),
+        { className: 'text-muted', textContent: `ID mensaje: ${p.id_mensaje || '—'} · ID campaña: ${p.id_campana || '—'}` }));
+      tr.appendChild(tdMomento);
       tr.appendChild(celda(p.asunto || '—', 'small'));
       const tdVars = document.createElement('td');
       pintarVariables(tdVars, p.variables);

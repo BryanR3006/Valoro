@@ -14,7 +14,7 @@ from uuid import uuid4
 from database import db, ProgramacionSms
 from listas_negras import LISTA_NEGRA_SMS
 from services.errores import marcar_claro
-from services.variables import buscar_columna, clave, es_nombre
+from services.variables import buscar_columna, clave, es_nombre, poner_ids
 import requests
 import logging
 import pandas as pd
@@ -252,34 +252,13 @@ def remover_tildes(texto: str) -> str:
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
 
 
-# Columnas del reporte donde van los IDs del constructor.
-COLUMNA_ID_MENSAJE = "Id Mensaje"
-COLUMNA_ID_CAMPANA = "Id Campaña"
-
-
-def _clave_columna(nombre) -> str:
-    """'Id Campaña', 'id_campana' e 'ID CAMPANA' dan la misma clave: idcampana."""
-    return re.sub(r"[^a-z0-9]", "", remover_tildes(str(nombre)).lower())
-
-
 def ids_en_callback(datos: Dict, id_mensaje: str = "", id_campana: str = "") -> Dict:
     """
-    Pone los IDs del constructor en las columnas 'Id Mensaje' / 'Id Campaña'
-    del callbackData, en lugar de los que trae la consulta (o el Excel), para
-    que el reporte de Infobip muestre los asignados en pantalla. Quita las
-    otras formas del mismo nombre (id_mensaje, ID MENSAJE…) para no repetir
-    columnas. Van primero: si el texto se recorta a 4000 caracteres no se pierden.
-    Sin ID en pantalla la fila queda como viene.
+    IDs del constructor en las columnas 'Id Mensaje' / 'Id Campaña' del
+    callbackData, en lugar de los de la consulta, para que el reporte de
+    Infobip muestre los asignados (misma regla que email: variables.poner_ids).
     """
-    ids = {}
-    if str(id_campana or "").strip():
-        ids[COLUMNA_ID_CAMPANA] = str(id_campana).strip()
-    if str(id_mensaje or "").strip():
-        ids[COLUMNA_ID_MENSAJE] = str(id_mensaje).strip()
-    if not ids:
-        return datos
-    claves = {_clave_columna(c) for c in ids}
-    return {**ids, **{k: v for k, v in datos.items() if _clave_columna(k) not in claves}}
+    return poner_ids(datos, id_mensaje, id_campana)
 
 
 def validar_variables(rows: List[Dict], variables: List[str]) -> Tuple[List[str], Dict[str, int]]:

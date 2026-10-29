@@ -215,8 +215,23 @@
             </a>
           </div>
           <div class="em-help">
-            <span>Al elegirla se llenan asunto y HTML; puedes ajustarlos solo para este envío.</span>
+            <span>Al elegirla se llenan asunto, HTML y los IDs; puedes ajustarlos solo para este envío.</span>
           </div>
+        </div>
+
+        <!-- IDS DEL MENSAJE Y LA CAMPAÑA (como en SMS) -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+          <div class="em-field">
+            <label for="idMensaje"><i class="fas fa-fingerprint"></i> ID del mensaje</label>
+            <input id="idMensaje" class="form-control" placeholder="Ej: MC01" maxlength="100" autocomplete="off">
+          </div>
+          <div class="em-field">
+            <label for="idCampana"><i class="fas fa-hashtag"></i> ID de la campaña</label>
+            <input id="idCampana" class="form-control" placeholder="Ej: CAMP-2026-10" maxlength="100" autocomplete="off">
+          </div>
+        </div>
+        <div class="em-help" style="margin:-8px 0 14px;">
+          <span>Vienen de la plantilla. Reemplazan los de la consulta y se suben a los campos "Id Mensaje" e "Id Campaña" de cada contacto: salen en el reporte de la plataforma de email y en el CSV de Historial de envíos.</span>
         </div>
 
         <!-- DATOS DEL EMAIL -->
@@ -391,6 +406,16 @@
               </select>
               <textarea id="editProgPlantilla" class="form-control textarea-html" rows="5"></textarea>
             </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+              <div class="em-field">
+                <label for="editProgIdMensaje">ID del mensaje</label>
+                <input id="editProgIdMensaje" class="form-control" maxlength="100" placeholder="Ej: MC01">
+              </div>
+              <div class="em-field">
+                <label for="editProgIdCampana">ID de la campaña</label>
+                <input id="editProgIdCampana" class="form-control" maxlength="100" placeholder="Ej: CAMP-2026-10">
+              </div>
+            </div>
             <div class="em-field">
               <label>Responsable</label>
               <input id="editProgUsuario" class="form-control">
@@ -544,6 +569,8 @@
   const replyEmailEl = document.getElementById('replyEmail');
   const confirmarReenvioEl = document.getElementById('confirmarReenvio');
   const plantillaSelEl = document.getElementById('plantillaSel');
+  const idMensajeEl = document.getElementById('idMensaje');
+  const idCampanaEl = document.getElementById('idCampana');
   let plantillasGuardadas = [];
   
   const previewBtn = document.getElementById('previewBtn');
@@ -658,6 +685,8 @@
       usuario: usuarioEl.value.trim(),
       reply_email: replyEmailEl.value.trim(),
       confirmar_reenvio: confirmarReenvioEl.checked,
+      id_mensaje: idMensajeEl.value.trim(),
+      id_campana: idCampanaEl.value.trim(),
       ...horarioNuevo.datos(),
       plantilla_id: plantillaSelEl.value || null
     };
@@ -801,6 +830,8 @@
     }
     asuntoEl.value = p.asunto;
     plantillaEl.value = p.html;
+    idMensajeEl.value = p.id_mensaje || '';
+    idCampanaEl.value = p.id_campana || '';
     updateCharCounter();
     pintarVariables(p.variables.map(v => ({ nombre: v })));
     vistaPreviaVencida();  // hay que volver a probar la consulta con la plantilla
@@ -814,7 +845,8 @@
     try {
       const resp = await fetch('/api/email/plantillas', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nombre, asunto: asuntoEl.value.trim(), html: plantillaEl.value.trim(), usuario: usuarioEl.value.trim() })
+        body: JSON.stringify({ nombre, asunto: asuntoEl.value.trim(), html: plantillaEl.value.trim(), usuario: usuarioEl.value.trim(),
+                               id_mensaje: idMensajeEl.value.trim(), id_campana: idCampanaEl.value.trim() })
       });
       const data = await resp.json();
       if (!data.success) throw new Error(data.message || 'No se pudo guardar');
@@ -1084,6 +1116,7 @@
   clearBtn.addEventListener('click', () => {
     queryEl.value = ''; asuntoEl.value = ''; plantillaEl.value = '';
     campanaEl.value = ''; usuarioEl.value = ''; replyEmailEl.value = '';
+    idMensajeEl.value = ''; idCampanaEl.value = '';
     delete campanaEl.dataset.auto;
     confirmarReenvioEl.checked = false; horarioNuevo.poner(null);
     plantillaSelEl.value = ''; pintarVariables([]);
@@ -1147,6 +1180,8 @@
     document.getElementById('editProgPlantillaSel').innerHTML = '<option value="">— Usar una plantilla guardada (opcional) —</option>' +
       plantillasGuardadas.filter(p => p.activa).map(p => `<option value="${p.id}">${escapeHtml((p.momento || 'Sin momento') + ' · ' + p.nombre)}</option>`).join('');
     document.getElementById('editProgUsuario').value = row.usuario || '';
+    document.getElementById('editProgIdMensaje').value = row.id_mensaje || '';
+    document.getElementById('editProgIdCampana').value = row.id_campana || '';
     // Hora de Colombia guardada tal cual ('AAAA-MM-DD HH:MM:SS').
     horarioEdicion.poner(row);
     editCard.style.display = 'block';
@@ -1157,6 +1192,8 @@
     if (p) {
       document.getElementById('editProgPlantilla').value = p.html || '';
       document.getElementById('editProgAsunto').value = p.asunto || '';
+      document.getElementById('editProgIdMensaje').value = p.id_mensaje || '';
+      document.getElementById('editProgIdCampana').value = p.id_campana || '';
     }
   });
   document.getElementById('editProgCerrar').addEventListener('click', () => { editCard.style.display = 'none'; });
@@ -1169,6 +1206,8 @@
       reply_email: document.getElementById('editProgReply').value.trim(),
       plantilla: document.getElementById('editProgPlantilla').value.trim(),
       usuario: document.getElementById('editProgUsuario').value.trim(),
+      id_mensaje: document.getElementById('editProgIdMensaje').value.trim(),
+      id_campana: document.getElementById('editProgIdCampana').value.trim(),
       ...horarioEdicion.datos()
     };
     if (faltantes(payload, { conFecha: true })) return;
@@ -1227,6 +1266,7 @@
         </div>
         <div class="prog-cuando">${cuando}</div>
         ${row.asunto ? `<div class="prog-mensaje" title="${escapeHtml(row.asunto)}"><i class="fas fa-envelope"></i> ${escapeHtml(row.asunto)}</div>` : ''}
+        ${row.id_mensaje || row.id_campana ? `<small style="display:block;">ID mensaje: <b>${escapeHtml(row.id_mensaje || '—')}</b> · ID campaña: <b>${escapeHtml(row.id_campana || '—')}</b></small>` : ''}
         <div class="prog-datos">
           <div class="prog-dato"><b>${row.ultimo_enviados ?? '—'}</b>Enviados</div>
           <div class="prog-dato" style="grid-column: span 2;"><b>${row.fecha_ejecucion ? escapeHtml(row.fecha_ejecucion.slice(0, 16)) : '—'}</b>Última ejecución</div>
