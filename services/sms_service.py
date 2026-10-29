@@ -614,6 +614,15 @@ def enviar_sms_desde_filas(
             mensaje_infobip["campaignReferenceId"] = id_campana
         messages.append(mensaje_infobip)
     
+    # Horario de envío: se revisa justo antes de mandar a Infobip (si el equipo
+    # se suspendió a mitad de un envío, al despertar no sale fuera de horario).
+    from general_params import get_horario_envio
+    from services.sms_horarios import MARGEN_FIN_ENVIO_MIN, fuera_de_horario
+    aviso_horario = fuera_de_horario(datetime.now(COLOMBIA_TZ), *get_horario_envio(), margen_min=MARGEN_FIN_ENVIO_MIN)
+    if aviso_horario:
+        logger.warning(f"⛔ SMS de la campaña '{campaign}' no enviados: {aviso_horario}")
+        raise marcar_claro(SmsServiceError(aviso_horario))
+
     # Dividir en lotes
     lotes = [messages[i:i + batch_size] for i in range(0, len(messages), batch_size)]
     if progreso:

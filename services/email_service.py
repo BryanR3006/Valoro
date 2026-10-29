@@ -4,7 +4,7 @@ import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
 
@@ -570,6 +570,19 @@ def verificar_campana_enviada(client, campana_id, intentos: int = 6, espera: int
     return {"status": status, "recipients_count": destinatarios}
 
 
+ZONA_COLOMBIA = timezone(timedelta(hours=-5))
+
+
+def _revisar_horario_envio(campana: str) -> None:
+    """EmailServiceError (mensaje claro) si ahora está fuera del horario de envío (Parámetros generales)."""
+    from general_params import get_horario_envio
+    from services.sms_horarios import MARGEN_FIN_ENVIO_MIN, fuera_de_horario
+    aviso = fuera_de_horario(datetime.now(ZONA_COLOMBIA), *get_horario_envio(), margen_min=MARGEN_FIN_ENVIO_MIN)
+    if aviso:
+        logger.warning(f"⛔ Email de la campaña '{campana}' no enviado: {aviso}")
+        raise marcar_claro(EmailServiceError(aviso))
+
+
 def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: str, campana: str,
                          usuario: str, reply_email: str, confirmar_reenvio: bool,
                          email_config: Dict, email_client=None,
@@ -582,6 +595,7 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
     """
     from services.email_client import EmailClient
 
+    _revisar_horario_envio(campana)
     api_key = email_config.get("api_key", "")
     from_email = email_config.get("from_email", "")
     if not api_key:
@@ -665,6 +679,9 @@ def enviar_campana_email(client_bq, rows: List[Dict], plantilla: str, asunto: st
         "content": traducir_a_member(plantilla, mapeo),
         "mailListsIds": [lista_id],
     }
+    # Otra vez justo antes de crear y enviar la campaña: cargar contactos tarda, y
+    # si el equipo se suspendió a mitad, al despertar no sale fuera de horario.
+    _revisar_horario_envio(campana)
     campana_id = _crear_campana(client, datos_campana, lista_id)
     try:
         if not client.enviar_campana(campana_id, send_now=1).get("success"):

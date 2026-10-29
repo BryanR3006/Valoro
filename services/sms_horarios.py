@@ -43,16 +43,52 @@ def validar_horario(hora_inicio, intervalo=None, hora_fin=None):
     return None
 
 
-def horas_del_dia(hora_inicio, intervalo=None, hora_fin=None):
-    """Horas ('HH:MM') en que sale en un día: solo hora_inicio, o cada intervalo hasta hora_fin."""
+def horas_del_dia(hora_inicio, intervalo=None, hora_fin=None, ventana=None):
+    """
+    Horas ('HH:MM') en que sale en un día: solo hora_inicio, o cada intervalo
+    hasta hora_fin. ventana: (desde, hasta) del horario de envío; los turnos
+    fuera de él no salen y no se cuentan.
+    """
     inicio = _minutos(hora_inicio)
     if not intervalo or not hora_fin:
-        return [f"{inicio // 60:02d}:{inicio % 60:02d}"]
-    fin = _minutos(hora_fin)
-    return [f"{m // 60:02d}:{m % 60:02d}" for m in range(inicio, fin + 1, int(intervalo))]
+        minutos = [inicio]
+    else:
+        minutos = range(inicio, _minutos(hora_fin) + 1, int(intervalo))
+    if ventana:
+        desde, hasta = (_minutos(h) for h in ventana)
+        minutos = [m for m in minutos if desde <= m <= hasta]
+    return [f"{m // 60:02d}:{m % 60:02d}" for m in minutos]
 
 
-def turno_a_enviar(ahora, ultima_ejecucion, hora_inicio, intervalo=None, hora_fin=None):
+# Horario de envío: un envío solo empieza entre desde y hasta (hasta incluido:
+# el turno de las 18:00 sale). El último paso (lotes a Infobip, campaña de
+# email) se revisa otra vez con este margen: termina lo que empezó a tiempo,
+# pero nada sale horas después (p. ej. si el equipo se suspendió a mitad).
+MARGEN_FIN_ENVIO_MIN = 15
+
+
+def fuera_de_horario(ahora, desde, hasta, margen_min=0):
+    """
+    Mensaje claro si ahora (hora de Colombia) está fuera del horario de envío
+    [desde, hasta]; None si se puede enviar. margen_min: minutos de gracia
+    después de hasta.
+    """
+    minuto = ahora.hour * 60 + ahora.minute
+    if _minutos(desde) <= minuto <= _minutos(hasta) + margen_min:
+        return None
+    return (f"Fuera del horario de envío ({desde} a {hasta}): son las {ahora:%H:%M} y "
+            "no se envía nada.")
+
+
+def error_hora_de_envio(hora, desde, hasta, campo="La hora de envío"):
+    """Mensaje si 'HH:MM' queda fuera del horario de envío (al crear o editar una programación); None si está bien."""
+    if _minutos(desde) <= _minutos(hora) <= _minutos(hasta):
+        return None
+    return (f"{campo} ({hora}) debe estar entre las {desde} y las {hasta}: fuera de ese horario "
+            "no se envía nada.")
+
+
+def turno_a_enviar(ahora, ultima_ejecucion, hora_inicio, intervalo=None, hora_fin=None, ventana=None):
     """
     Turno (datetime) que toca enviar ahora, o None si no toca.
 
@@ -62,10 +98,11 @@ def turno_a_enviar(ahora, ultima_ejecucion, hora_inicio, intervalo=None, hora_fi
     - Con intervalo: el último turno que ya llegó, si no se envió todavía, no
       pasó hora_fin y no va muy tarde (más de la mitad del intervalo, mínimo
       15 min): un turno perdido se salta para no mandar dos seguidos.
+    ventana: (desde, hasta) del horario de envío; los turnos fuera de él no salen.
     """
     hoy = ahora.date()
     turnos = [datetime.combine(hoy, datetime.min.time()).replace(hour=int(h[:2]), minute=int(h[3:]))
-              for h in horas_del_dia(hora_inicio, intervalo, hora_fin)]
+              for h in horas_del_dia(hora_inicio, intervalo, hora_fin, ventana)]
     if ahora.tzinfo is not None:
         turnos = [ahora.tzinfo.localize(t) if hasattr(ahora.tzinfo, "localize") else t.replace(tzinfo=ahora.tzinfo)
                   for t in turnos]

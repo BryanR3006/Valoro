@@ -34,6 +34,8 @@ from bigquery import fetch_sms_query_rows
 from services.sms_service import (
     SMS_LOG_TABLE, SmsServiceError, enviar_sms_desde_filas, preview_sms, resumen_filtros_sms,
 )
+from services.errores import marcar_claro
+from services.sms_horarios import MARGEN_FIN_ENVIO_MIN
 from services.email_client import EmailClient, EmailClientError
 from services.email_service import (
     EMAIL_LOG_TABLE, EmailServiceError, preview_email,
@@ -144,7 +146,7 @@ def _programaciones_sms_de_hoy(hoy, ejecuciones_hoy, desde_registro):
                 hora = f"{hora} a {prog.hora_fin}, cada {_texto_intervalo(prog.intervalo_minutos)}"
             toca = prog.estado == "pendiente" and not (prog.fecha_fin and prog.fecha_fin < hoy.isoformat())
             try:
-                horas = horas_del_dia(prog.hora_inicio or "08:00", prog.intervalo_minutos, prog.hora_fin)
+                horas = horas_del_dia(prog.hora_inicio or "08:00", prog.intervalo_minutos, prog.hora_fin, _horario_envio())
             except ValueError:
                 pass
         else:
@@ -210,7 +212,7 @@ def _programaciones_email_de_hoy(hoy, ejecuciones_hoy, desde_registro):
                 hora = f"{hora} a {prog.hora_fin}, cada {_texto_intervalo(prog.intervalo_minutos)}"
             if prog.estado in ("pendiente", "enviando", "error"):
                 try:
-                    horas = horas_del_dia(prog.hora_recurrente() or "08:00", prog.intervalo_minutos, prog.hora_fin)
+                    horas = horas_del_dia(prog.hora_recurrente() or "08:00", prog.intervalo_minutos, prog.hora_fin, _horario_envio())
                 except ValueError:
                     pass
         else:
@@ -571,6 +573,10 @@ def sms_send():
     faltan = _faltantes_sms(data)
     if faltan:
         return _respuesta_faltantes(faltan)
+    aviso_horario = _fuera_de_horario()
+    if aviso_horario:
+        log_activity(f"⚠️ SMS '{campaign}': NO SE ENVIÓ. {aviso_horario}", "WARNING")
+        return jsonify({"success": False, "message": aviso_horario}), 400
 
     try:
         rows, origen, error_response = _sms_filas_de_peticion(data)
@@ -672,6 +678,29 @@ def mensaje_error(exc, servicio=None):
     return explicar_error(exc, servicio=servicio, bigquery=mensaje_error_bigquery)
 
 
+def _horario_envio():
+    """(desde, hasta) del horario de envío en hora de Colombia (Parámetros generales; por defecto 07:00 a 18:00)."""
+    from general_params import get_horario_envio
+    return get_horario_envio()
+
+
+def _fuera_de_horario(margen_min=0):
+    """
+    Mensaje claro si ahora no se puede empezar un envío (fuera del horario de
+    envío); None si se puede. margen_min: gracia después de la hora final
+    (los jobs programados usan MARGEN_FIN_ENVIO_MIN: el turno de las 18:00 de
+    un job que revisa cada 10 min sale aunque arranque 18:05).
+    """
+    from services.sms_horarios import fuera_de_horario
+    return fuera_de_horario(datetime.now(COLOMBIA_TZ), *_horario_envio(), margen_min=margen_min)
+
+
+def _error_hora_programada(hora, campo="La hora de envío"):
+    """Mensaje si 'HH:MM' de una programación queda fuera del horario de envío; None si está bien."""
+    from services.sms_horarios import error_hora_de_envio
+    return error_hora_de_envio(hora, *_horario_envio(), campo=campo)
+
+
 def registrar_ejecucion(canal, prog_id, campana, turno, resultado, *, filas=None, enviados=None,
                         excluidos=None, mensaje=None):
     """
@@ -767,7 +796,7 @@ def execute_sms_schedule(schedule_id: str):
                     ultima = intento
             try:
                 turno = turno_a_enviar(ahora, ultima, prog.hora_inicio or '08:00',
-                                       prog.intervalo_minutos, prog.hora_fin)
+                                       prog.intervalo_minutos, prog.hora_fin, ventana=_horario_envio())
             except ValueError:
                 logger_sms.warning(f"⚠️ Recurrente SMS #{prog.id}: horario inválido ({prog.hora_inicio})")
                 return
@@ -789,6 +818,10 @@ def execute_sms_schedule(schedule_id: str):
             db.session.commit()
         try:
             logger_sms.info(f"📤 Ejecutando SMS {tipo.upper()} #{prog.id} - {prog.campana}")
+            # Fuera del horario de envío no empieza (p. ej. la app o el equipo volvieron tarde).
+            aviso_horario = _fuera_de_horario(margen_min=MARGEN_FIN_ENVIO_MIN)
+            if aviso_horario:
+                raise marcar_claro(SmsServiceError(aviso_horario))
 
             config = load_config()
             infobip_config = config.get("infobip", {})
@@ -830,7 +863,6 @@ def execute_sms_schedule(schedule_id: str):
             )
             if resultado.get("enviados", 0) == 0 and resultado.get("fallidos", 0) > 0:
                 # Ningún SMS salió (sin saldo, sin conexión, clave…): es un error, no un envío.
-                from services.errores import marcar_claro
                 raise marcar_claro(SmsServiceError(resultado.get("message") or "Ningún SMS salió."))
 
             if tipo == 'simple':
@@ -987,7 +1019,11 @@ def _leer_repeticion(data, hora_inicio):
     except (TypeError, ValueError):
         return None, None, "Intervalo inválido."
     hora_fin = ((data.get("hora_fin") or "").strip() or None) if intervalo else None
-    return intervalo, hora_fin, validar_horario(hora_inicio, intervalo, hora_fin)
+    # Las horas tienen que quedar dentro del horario de envío (Parámetros generales).
+    error = (validar_horario(hora_inicio, intervalo, hora_fin)
+             or _error_hora_programada(hora_inicio)
+             or (hora_fin and _error_hora_programada(hora_fin, "La hora 'Hasta las'")))
+    return intervalo, hora_fin, error
 
 
 def _texto_horario(hora_inicio, intervalo, hora_fin):
@@ -995,7 +1031,7 @@ def _texto_horario(hora_inicio, intervalo, hora_fin):
     from services.sms_horarios import horas_del_dia
     if not intervalo:
         return f"todos los días a las {hora_inicio}"
-    return f"todos los días a las {', '.join(horas_del_dia(hora_inicio, intervalo, hora_fin))}"
+    return f"todos los días a las {', '.join(horas_del_dia(hora_inicio, intervalo, hora_fin, _horario_envio()))}"
 
 
 @app.route("/api/sms/programar", methods=["POST"])
@@ -1031,6 +1067,9 @@ def sms_programar_simple():
 
         if run_date <= datetime.now(COLOMBIA_TZ):
             raise SmsServiceError("La fecha programada debe ser futura.")
+        error_hora = _error_hora_programada(run_date.strftime("%H:%M"))
+        if error_hora:
+            raise SmsServiceError(error_hora)
 
         rows, origen, error_response = _sms_filas_de_peticion(data)
         if error_response:
@@ -1537,6 +1576,10 @@ def email_send():
     faltan = _faltantes_email(data)
     if faltan:
         return _respuesta_faltantes(faltan)
+    aviso_horario = _fuera_de_horario()
+    if aviso_horario:
+        log_activity(f"⚠️ Email '{campana_nombre}': NO SE ENVIÓ. {aviso_horario}", "WARNING")
+        return jsonify({"success": False, "message": aviso_horario}), 400
 
     try:
         rows, error_response = _get_sms_rows(query)
@@ -1721,6 +1764,9 @@ def _leer_horario_email(data):
         run_date = run_date.astimezone(COLOMBIA_TZ).replace(tzinfo=None)
     if run_date <= _ahora_colombia():
         return None, "La fecha y hora de envío debe ser futura."
+    error_hora = _error_hora_programada(run_date.strftime("%H:%M"))
+    if error_hora:
+        return None, error_hora
     return {"tipo": "simple", "fecha_programada": run_date, "hora_inicio": None,
             "intervalo_minutos": None, "hora_fin": None, "fecha_fin": None}, None
 
@@ -1803,7 +1849,8 @@ def _email_turno(prog, ahora):
     desde = prog.fecha_programada - timedelta(seconds=1)
     # Un turno ya intentado (aunque haya fallado) no se repite: sigue el próximo.
     ultima = max(d for d in (prog.fecha_ejecucion, desde, prog.ultimo_intento) if d)
-    return turno_a_enviar(ahora, ultima, prog.hora_recurrente() or "08:00", prog.intervalo_minutos, prog.hora_fin)
+    return turno_a_enviar(ahora, ultima, prog.hora_recurrente() or "08:00", prog.intervalo_minutos, prog.hora_fin,
+                          ventana=_horario_envio())
 
 
 def execute_email_schedule(schedule_id: str):
@@ -1853,6 +1900,10 @@ def execute_email_schedule(schedule_id: str):
                 # Se marca antes de enviar: si falla a mitad, este turno no se repite (duplicaría lo que salió).
                 prog.ultimo_intento = turno
                 db.session.commit()
+            # Fuera del horario de envío no empieza (p. ej. la app o el equipo volvieron tarde).
+            aviso_horario = _fuera_de_horario(margen_min=MARGEN_FIN_ENVIO_MIN)
+            if aviso_horario:
+                raise marcar_claro(EmailServiceError(aviso_horario))
             if not _asegurar_bq():
                 raise EmailServiceError("No se pudo conectar a BigQuery para leer la base de la consulta.")
             logger_email.info(f"   🔎 '{campana}': corriendo la consulta en BigQuery…")
@@ -2662,7 +2713,8 @@ def api_update_programacion(prog_id):
     if "intervalo_minutos" in data:
         intervalo_minutos, hora_fin, error_horario = _leer_repeticion(data, hora_inicio)
     else:
-        intervalo_minutos, hora_fin, error_horario = prog.intervalo_minutos, prog.hora_fin, None
+        intervalo_minutos, hora_fin = prog.intervalo_minutos, prog.hora_fin
+        error_horario = _error_hora_programada(hora_inicio) if tipo == "recurrente" else None
     if tipo == "recurrente" and error_horario:
         return jsonify({"success": False, "message": error_horario}), 400
 
@@ -2676,6 +2728,9 @@ def api_update_programacion(prog_id):
             fecha_programada = fecha_programada.astimezone(COLOMBIA_TZ).replace(tzinfo=None)
         if COLOMBIA_TZ.localize(fecha_programada) <= datetime.now(COLOMBIA_TZ):
             return jsonify({"success": False, "message": "La fecha y hora de envío debe ser futura."}), 400
+        error_hora = _error_hora_programada(fecha_programada.strftime("%H:%M"))
+        if error_hora:
+            return jsonify({"success": False, "message": error_hora}), 400
 
     # La consulta se revisa en BigQuery (dry run: no lee datos) si cambió.
     if not es_excel and consulta.strip() != (prog.consulta_sql or "").strip():

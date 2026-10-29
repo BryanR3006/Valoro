@@ -21,6 +21,11 @@ DEFAULT_CONSOLE_MESSAGE_INTERVAL_SECONDS = 60
 MIN_CONSOLE_MESSAGE_INTERVAL_SECONDS = 60
 MAX_CONSOLE_MESSAGE_INTERVAL_SECONDS = 3600
 
+# Horario de envío (hora de Colombia): fuera de él no sale ningún SMS ni email,
+# ni manual ni programado (services/sms_horarios.fuera_de_horario).
+DEFAULT_HORARIO_ENVIO_DESDE = "07:00"
+DEFAULT_HORARIO_ENVIO_HASTA = "18:00"
+
 
 def _ensure_config() -> None:
     if not os.path.exists(CONFIG_PATH):
@@ -58,10 +63,30 @@ def _normalize_console_message_interval_seconds(value) -> int:
     )
 
 
+def _normalize_hora(value, default: str) -> str:
+    """'HH:MM' válida (07:00), o el valor por defecto."""
+    try:
+        hh, mm = (int(x) for x in str(value).strip().split(":")[:2])
+    except (TypeError, ValueError):
+        return default
+    return f"{hh:02d}:{mm:02d}" if 0 <= hh < 24 and 0 <= mm < 60 else default
+
+
+def _normalize_horario_envio(desde, hasta) -> tuple[str, str]:
+    """(desde, hasta) válidos; si no hay un rango (desde antes de hasta), el de por defecto."""
+    desde = _normalize_hora(desde, DEFAULT_HORARIO_ENVIO_DESDE)
+    hasta = _normalize_hora(hasta, DEFAULT_HORARIO_ENVIO_HASTA)
+    if desde >= hasta:
+        return DEFAULT_HORARIO_ENVIO_DESDE, DEFAULT_HORARIO_ENVIO_HASTA
+    return desde, hasta
+
+
 def _defaults() -> dict:
     return {
         "log_retention_hours": DEFAULT_LOG_RETENTION_HOURS,
         "console_message_interval_seconds": DEFAULT_CONSOLE_MESSAGE_INTERVAL_SECONDS,
+        "horario_envio_desde": DEFAULT_HORARIO_ENVIO_DESDE,
+        "horario_envio_hasta": DEFAULT_HORARIO_ENVIO_HASTA,
     }
 
 
@@ -79,7 +104,24 @@ def _merge_params(raw: dict | None) -> dict:
                 )
             )
         )
+        base["horario_envio_desde"], base["horario_envio_hasta"] = _normalize_horario_envio(
+            raw.get("horario_envio_desde"), raw.get("horario_envio_hasta"))
     return base
+
+
+def get_horario_envio() -> tuple[str, str]:
+    """
+    (desde, hasta) del horario de envío, 'HH:MM' en hora de Colombia. Se lee
+    en cada envío: un cambio en config.json aplica sin reiniciar. Si no se
+    puede leer, el de por defecto (07:00 a 18:00): nunca queda sin límite.
+    """
+    try:
+        with _lock:
+            cfg = _read_config()
+        params = _merge_params(cfg.get(GENERAL_PARAMS_KEY))
+        return params["horario_envio_desde"], params["horario_envio_hasta"]
+    except Exception:
+        return DEFAULT_HORARIO_ENVIO_DESDE, DEFAULT_HORARIO_ENVIO_HASTA
 
 
 def get_log_retention_hours() -> int:
@@ -155,9 +197,15 @@ def save_general_parameters(data: dict) -> dict:
                     current["console_message_interval_seconds"],
                 )
             )
+            desde, hasta = _normalize_horario_envio(
+                payload.get("horario_envio_desde", current["horario_envio_desde"]),
+                payload.get("horario_envio_hasta", current["horario_envio_hasta"]),
+            )
             cfg[GENERAL_PARAMS_KEY] = {
                 "log_retention_hours": hours,
                 "console_message_interval_seconds": console_seconds,
+                "horario_envio_desde": desde,
+                "horario_envio_hasta": hasta,
                 "updated_at": datetime.now().isoformat(),
             }
             _write_config(cfg)
@@ -167,6 +215,8 @@ def save_general_parameters(data: dict) -> dict:
             "parameters": {
                 "log_retention_hours": hours,
                 "console_message_interval_seconds": console_seconds,
+                "horario_envio_desde": desde,
+                "horario_envio_hasta": hasta,
             },
             "scheduler_applied": True,
         }

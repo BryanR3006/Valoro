@@ -13,15 +13,38 @@
 {% endif %}
 
 <form id="generalParamsForm" onsubmit="event.preventDefault(); saveGeneralParameters();">
+    <div class="card card-outline card-warning mb-3">
+        <div class="card-header">
+            <h3 class="card-title">Horario de envío</h3>
+        </div>
+        <div class="card-body">
+            <p class="text-muted">
+                Fuera de este horario (hora de Colombia) no sale ningún SMS ni email: ni envíos manuales
+                ni programaciones. Un turno a la hora final sí sale (el de las 18:00); lo que ya empezó
+                puede terminar hasta 15 minutos después, y nada sale más tarde (por ejemplo si el equipo
+                se suspendió a mitad de un envío).
+            </p>
+            <div class="form-group">
+                <label for="horarioDesde">Desde las</label>
+                <input type="time" id="horarioDesde" class="form-control col-md-4"
+                       value="{{ parameters.horario_envio_desde }}" required />
+            </div>
+            <div class="form-group">
+                <label for="horarioHasta">Hasta las</label>
+                <input type="time" id="horarioHasta" class="form-control col-md-4"
+                       value="{{ parameters.horario_envio_hasta }}" required />
+            </div>
+        </div>
+    </div>
+
     <div class="card card-outline card-info mb-3">
         <div class="card-header">
             <h3 class="card-title">Mensaje en consola</h3>
         </div>
         <div class="card-body">
             <p class="text-muted">
-                Escribe en la terminal <code>Revisando programaciones de SMS y email...</code>
-                cada N segundos (por defecto 60 = 1 minuto), para saber que la aplicación sigue viva.
-                No envía nada.
+                Cada N segundos (por defecto 60 = 1 minuto) revisa las programaciones pendientes de hoy
+                y, si cambiaron, las muestra en la terminal y en Actividad en vivo. No envía nada.
             </p>
             <div class="form-group">
                 <label for="consoleMessageSeconds">
@@ -133,6 +156,12 @@
             setResult(`Retención: ingrese un valor entre ${RETENTION_LIMITS.min} y ${RETENTION_LIMITS.max} horas.`, false);
             return;
         }
+        const desde = document.getElementById('horarioDesde').value;
+        const hasta = document.getElementById('horarioHasta').value;
+        if (!desde || !hasta || desde >= hasta) {
+            setResult('Horario de envío: la hora "Desde" debe ser antes de "Hasta".', false);
+            return;
+        }
         setResult('Guardando...', true);
         try {
             const resp = await fetch('/config-general/save', {
@@ -141,6 +170,8 @@
                 body: JSON.stringify({
                     console_message_interval_seconds: consoleSeconds,
                     log_retention_hours: hours,
+                    horario_envio_desde: desde,
+                    horario_envio_hasta: hasta,
                 }),
             });
             const data = await resp.json();
@@ -149,6 +180,8 @@
                     data.parameters.console_message_interval_seconds;
                 document.getElementById('logRetentionHours').value =
                     data.parameters.log_retention_hours;
+                document.getElementById('horarioDesde').value = data.parameters.horario_envio_desde;
+                document.getElementById('horarioHasta').value = data.parameters.horario_envio_hasta;
                 updateConsoleHint(data.parameters.console_message_interval_seconds);
                 updateRetentionHint(data.parameters.log_retention_hours);
                 let msg = data.message + ' Mensaje consola: cada ' +

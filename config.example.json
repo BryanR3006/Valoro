@@ -3,7 +3,9 @@
   "usuario_admin_clave": "",
   "general_parameters": {
     "console_message_interval_seconds": 60,
-    "log_retention_hours": 72
+    "log_retention_hours": 72,
+    "horario_envio_desde": "07:00",
+    "horario_envio_hasta": "18:00"
   },
   "email": {
     "api_key": "",
