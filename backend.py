@@ -277,7 +277,8 @@ app.config["JSON_SORT_KEYS"] = False
 app.config["SECRET_KEY"] = _clave_sesiones()
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
+# La sesión dura 6 h desde el ingreso, aunque se siga usando (usuarios.guardia / sesion_vencida).
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=6)
 app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
 app.config["DOWNLOAD_FOLDER"] = str(DOWNLOAD_FOLDER)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024

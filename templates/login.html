@@ -118,6 +118,11 @@
                 Luego ingresa aquí con ese usuario.
             </div></div>
             {% endif %}
+            {% if vencida and not error %}
+            <div class="alert alert-warning"><i class="fas fa-clock"></i><div>
+                Tu sesión se cerró porque pasaron {{ horas_sesion }} horas desde que ingresaste. Ingresa de nuevo.
+            </div></div>
+            {% endif %}
             {% if error %}
             <div class="alert alert-danger" role="alert"><i class="fas fa-circle-exclamation"></i><div>{{ error }}</div></div>
             {% endif %}

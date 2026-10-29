@@ -251,10 +251,17 @@ def errores_clave(clave):
     return []
 
 
+def sesion_vencida(ingreso, ahora, duracion_segundos):
+    """La sesión dura un tiempo fijo desde el ingreso: usar la app no la alarga.
+    Sin hora de ingreso (sesión de antes de esta regla) cuenta como vencida."""
+    return not isinstance(ingreso, (int, float)) or ahora - ingreso >= duracion_segundos
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Parte Flask (se instala desde app.py con usuarios.instalar(app))
 # ══════════════════════════════════════════════════════════════════════
 
+import time
 from datetime import datetime, timedelta
 
 from flask import (current_app, flash, g, get_flashed_messages, has_request_context,
@@ -286,12 +293,15 @@ def guardia():
         return None
     uid = session.get("usuario_id")
     usuario = db.session.get(Usuario, uid) if uid else None
-    if usuario is None or not usuario.activo:
+    vencida = usuario is not None and sesion_vencida(
+        session.get("ingreso"), time.time(), current_app.permanent_session_lifetime.total_seconds())
+    if usuario is None or not usuario.activo or vencida:
         session.clear()
         if _quiere_json():
-            return jsonify({"success": False, "message": "Inicia sesión"}), 401
+            mensaje = "Tu sesión venció: inicia sesión de nuevo." if vencida else "Inicia sesión"
+            return jsonify({"success": False, "message": mensaje}), 401
         siguiente = request.full_path if request.query_string else request.path
-        return redirect("/login?" + _query({"next": siguiente}))
+        return redirect("/login?" + _query({"next": siguiente, **({"vencida": 1} if vencida else {})}))
     g.usuario = usuario
     if usuario.debe_cambiar_clave and not puede_con_clave_pendiente(request.path):
         if _quiere_json():
@@ -413,12 +423,16 @@ def login():
             session.clear()
             session.permanent = True
             session["usuario_id"] = usuario.id
+            session["ingreso"] = int(time.time())  # vence PERMANENT_SESSION_LIFETIME después (sesion_vencida)
             usuario.ultimo_ingreso = _ahora_colombia()
             db.session.commit()
             return redirect(RUTA_CAMBIAR_CLAVE if usuario.debe_cambiar_clave else siguiente)
         error = "Usuario o clave incorrectos."
+    horas_sesion = int(current_app.permanent_session_lifetime.total_seconds() // 3600)
+    vencida = request.method == "GET" and request.args.get("vencida") == "1"
     return render_template("login.html", error=error, siguiente=siguiente,
-                           sin_usuarios=sin_usuarios, nombre_usuario=nombre_usuario), (401 if error else 200)
+                           sin_usuarios=sin_usuarios, nombre_usuario=nombre_usuario,
+                           vencida=vencida, horas_sesion=horas_sesion), (401 if error else 200)
 
 
 def cambiar_clave():
